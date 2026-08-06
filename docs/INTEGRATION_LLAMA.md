@@ -1,120 +1,79 @@
-# Integración de CRC-DF con llama.cpp / modelos locales
+# Integración real CRC-DF × llama.cpp
 
-CRC-DF se expone como **sustrato de memoria geométrica exógena**.  
-El modelo local (llama.cpp u otro) no "entiende" la memoria: solo emite observaciones y queries. La geometría hace el resto.
-
-## 1. Compilar la biblioteca compartida
+## Compilar la memoria
 
 ```bash
 zig build -Doptimize=ReleaseFast
-# produce:
-#   zig-out/lib/libcrc_df.so   (Linux)
-#   zig-out/lib/libcrc_df.dylib (macOS)
-#   zig-out/bin/crc-df         (CLI)
+# genera:
+#   zig-out/bin/crc-df
+#   zig-out/lib/libcrc_df.so   (+ include/crc_df.h)
 ```
 
-Header público: `include/crc_df.h`
+## Opción A — Loop real con llama-cpp-python (recomendado)
 
-## 2. Uso desde C / C++ (llama.cpp tool / server hook)
+```bash
+pip install llama-cpp-python
+
+python integrations/llama_crc_agent.py \
+  --model /ruta/a/tu/modelo.gguf \
+  --n-gpu-layers 0
+```
+
+El agente expone tres tools al modelo:
+
+| Tool | Función |
+|------|--------|
+| `memory_observe` | Colapsa un hecho/resolución en el campo (strength configurable) |
+| `memory_recall`  | Estabiliza + decodifica las observaciones más cercanas |
+| `memory_sleep`   | Presión geométrica selectiva (solo refuerza lo fuerte) |
+
+Comandos locales del loop:
+- `/stats` — estado del campo
+- `/sleep [n]` — consolidación manual
+- `/reset` — borra el campo
+- `/quit`
+
+### Ejemplo de sesión
+
+```
+you> el servidor de staging usa PostgreSQL 15
+  [tool] memory_observe({'text': '...', 'strength': 1.0})
+
+you> hubo un conflicto openssl y se resolvió pineando 3.0.12 y rebuild
+  [tool] memory_observe({'text': 'resolution: ...', 'strength': 1.5})
+
+you> cómo resolvimos lo de openssl?
+  [tool] memory_recall({'query': 'openssl conflicto resolución'})
+  assistant> La vez pasada se pineó openssl a 3.0.12 y se reconstruyó el contenedor...
+```
+
+## Opción B — llama-server + tools externas
+
+1. Levantá el server:
+```bash
+./llama-server -m model.gguf --port 8080
+```
+
+2. Usá el mismo `CrcDF` (ctypes) desde cualquier cliente que hable OpenAI-compatible y soporte tool calls (incluyendo el propio client de llama.cpp si está habilitado).
+
+El binding C es idéntico al del agente Python.
+
+## Opción C — Solo C/C++ (sin Python)
 
 ```c
 #include "crc_df.h"
 
-void agent_on_resolution(const char *fix_text) {
-    /* Las resoluciones se graban con strength alta */
-    crc_observe(fix_text, 1.5);
-}
-
-void agent_before_answering(const char *user_query, char *memory_ctx, size_t n) {
-    /* Recuperar trayectoria / hechos relevantes */
-    int lines = crc_recall(user_query, memory_ctx, n, 4);
-    if (lines > 0) {
-        /* Prefijar el contexto del modelo con lo recuperado */
-    }
-}
-
-void agent_idle() {
-    /* Presión geométrica selectiva en background */
-    crc_sleep(2);
-}
+// en tu hook de tool de llama.cpp:
+crc_observe(resolution_text, 1.5);
+char buf[8192];
+int n = crc_recall(user_query, buf, sizeof buf, 4);
 ```
 
-## 3. Patrón de tool-calling (recomendado)
+Link: `-Lzig-out/lib -lcrc_df`
 
-Definir dos tools para el modelo:
+## Principios de integración (alien)
 
-### Tool: `memory_observe`
-```json
-{
-  "name": "memory_observe",
-  "description": "Permanently store a fact, preference, diagnosis or resolution into long-term geometric memory. Use higher strength (1.5) for successful resolutions.",
-  "parameters": {
-    "text": "string",
-    "strength": "number (default 1.0)"
-  }
-}
-```
-
-### Tool: `memory_recall`
-```json
-{
-  "name": "memory_recall",
-  "description": "Retrieve the most relevant past observations / resolution trajectories for a query.",
-  "parameters": {
-    "query": "string",
-    "top_k": "integer (default 4)"
-  }
-}
-```
-
-El host (llama.cpp server, llama-cli con grammar, o un wrapper Python) implementa las tools llamando a `crc_observe` / `crc_recall`.
-
-## 4. Wrapper Python mínimo (ctypes)
-
-```python
-import ctypes, os
-
-lib = ctypes.CDLL("./zig-out/lib/libcrc_df.so")
-
-lib.crc_observe.argtypes = [ctypes.c_char_p, ctypes.c_double]
-lib.crc_recall.argtypes  = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint32]
-lib.crc_recall.restype   = ctypes.c_int
-lib.crc_sleep.argtypes   = [ctypes.c_uint32]
-lib.crc_reset.argtypes   = []
-
-def observe(text: str, strength: float = 1.0):
-    lib.crc_observe(text.encode(), strength)
-
-def recall(query: str, top_k: int = 4) -> list[str]:
-    buf = ctypes.create_string_buffer(8192)
-    n = lib.crc_recall(query.encode(), buf, 8192, top_k)
-    if n <= 0:
-        return []
-    return buf.value.decode().strip().split("\n")
-
-def sleep(cycles: int = 2):
-    lib.crc_sleep(cycles)
-```
-
-Este wrapper se puede enganchar como tools de cualquier agente local (llama-cpp-python, oobabooga, text-generation-webui, etc.).
-
-## 5. Mentalidad de integración (alien)
-
-- El modelo **no** es el dueño de la memoria.
-- El modelo es un emisor de deformaciones (observe) y de perturbaciones (recall).
-- `strength` es presión selectiva, no "importancia subjetiva".
-- `sleep` no es reflexión: es optimización de campo en background.
-- Nunca se borra: solo se deja de reforzar lo débil (hambre geométrica).
-
-## 6. Flujo típico con un modelo local
-
-```
-Usuario → modelo
-         ↘ memory_recall(query)     → CRC-DF devuelve trayectoria/hechos
-modelo usa el contexto recuperado
-         ↘ (si resolvió algo) memory_observe(resolución, 1.5)
-…
-idle / entre turnos → crc_sleep(1..3)
-```
-
-Costo añadido por ciclo de memoria: ~6 µs. Irrelevante frente a cualquier forward pass de un LLM.
+- El modelo **emite** deformaciones y queries. No interpreta la geometría.
+- `strength` es presión selectiva, no opinión.
+- `sleep` no es reflexión: es optimización de campo.
+- Costo de memoria por ciclo: ~6 µs. Irrelevante frente al forward del LLM.
