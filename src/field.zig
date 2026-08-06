@@ -15,7 +15,6 @@ pub const ResonanceField = struct {
             .state = undefined,
             .collapse_count = 0,
         };
-        // Deterministic small seed so the field is not perfectly symmetric
         var prng = std.Random.DefaultPrng.init(42);
         const rand = prng.random();
         var sum_sq: f64 = 0.0;
@@ -23,9 +22,9 @@ pub const ResonanceField = struct {
             v.* = rand.floatNorm(f64) * 0.01;
             sum_sq += v.* * v.*;
         }
-        const norm = @sqrt(sum_sq) + 1e-12;
+        const n = @sqrt(sum_sq) + 1e-12;
         for (&f.state) |*v| {
-            v.* /= norm;
+            v.* /= n;
         }
         return f;
     }

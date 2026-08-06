@@ -12,28 +12,22 @@ const DIM = field_mod.DIM;
 const STORE_PATH = "crc_df_field.bin";
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arg_it = std.process.args();
+    _ = arg_it.skip();
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
-
-    _ = args.next(); // skip program name
-
-    const cmd = args.next() orelse {
-        try printUsage();
+    const cmd = arg_it.next() orelse {
+        printUsage();
         return;
     };
 
     if (std.mem.eql(u8, cmd, "observe")) {
-        const text = args.next() orelse {
+        const text = arg_it.next() orelse {
             std.debug.print("usage: crc-df observe \"<text>\"\n", .{});
             return;
         };
         try cmdObserve(text);
     } else if (std.mem.eql(u8, cmd, "recall")) {
-        const query = args.next() orelse {
+        const query = arg_it.next() orelse {
             std.debug.print("usage: crc-df recall \"<query>\"\n", .{});
             return;
         };
@@ -41,13 +35,12 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, cmd, "stats")) {
         try cmdStats();
     } else {
-        try printUsage();
+        printUsage();
     }
 }
 
-fn printUsage() !void {
-    const out = std.io.getStdOut().writer();
-    try out.writeAll(
+fn printUsage() void {
+    std.debug.print(
         \\CRC-DF — Campo de Resonancia Colapsable de Dimensión Fija
         \\
         \\Commands:
@@ -55,6 +48,8 @@ fn printUsage() !void {
         \\  recall  "<query>"  stabilise under query and report field response
         \\  stats              show current field statistics
         \\
+        ,
+        .{},
     );
 }
 

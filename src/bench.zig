@@ -1,6 +1,5 @@
 //! Micro-benchmark harness for CRC-DF core operations.
 //! Measures wall-clock cost of collapse and stabilise.
-//! Designed to run on both i7-10700 and Raspberry Pi 500+.
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -13,11 +12,9 @@ const DIM = field_mod.DIM;
 const ITERATIONS: u32 = 5000;
 
 pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
-
-    try stdout.print("CRC-DF Micro-Benchmark\n", .{});
-    try stdout.print("DIM = {d}\n", .{DIM});
-    try stdout.print("Iterations per measurement = {d}\n\n", .{ITERATIONS});
+    std.debug.print("CRC-DF Micro-Benchmark\n", .{});
+    std.debug.print("DIM = {d}\n", .{DIM});
+    std.debug.print("Iterations per measurement = {d}\n\n", .{ITERATIONS});
 
     // --- Collapse benchmark ---
     {
@@ -33,10 +30,10 @@ pub fn main() !void {
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 
-        try stdout.print("collapse:\n", .{});
-        try stdout.print("  total   = {d} ns\n", .{total_ns});
-        try stdout.print("  per op  = {d} ns\n", .{per_op_ns});
-        try stdout.print("  per op  = {d:.3} µs\n\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
+        std.debug.print("collapse:\n", .{});
+        std.debug.print("  total   = {d} ns\n", .{total_ns});
+        std.debug.print("  per op  = {d} ns\n", .{per_op_ns});
+        std.debug.print("  per op  = {d:.3} µs\n\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
     }
 
     // --- Stabilise benchmark ---
@@ -56,10 +53,10 @@ pub fn main() !void {
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 
-        try stdout.print("stabilise (12 steps):\n", .{});
-        try stdout.print("  total   = {d} ns\n", .{total_ns});
-        try stdout.print("  per op  = {d} ns\n", .{per_op_ns});
-        try stdout.print("  per op  = {d:.3} µs\n\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
+        std.debug.print("stabilise (12 steps):\n", .{});
+        std.debug.print("  total   = {d} ns\n", .{total_ns});
+        std.debug.print("  per op  = {d} ns\n", .{per_op_ns});
+        std.debug.print("  per op  = {d:.3} µs\n\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
     }
 
     // --- Combined observe+recall style cost ---
@@ -79,11 +76,11 @@ pub fn main() !void {
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 
-        try stdout.print("collapse + stabilise (combined):\n", .{});
-        try stdout.print("  total   = {d} ns\n", .{total_ns});
-        try stdout.print("  per op  = {d} ns\n", .{per_op_ns});
-        try stdout.print("  per op  = {d:.3} µs\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
+        std.debug.print("collapse + stabilise (combined):\n", .{});
+        std.debug.print("  total   = {d} ns\n", .{total_ns});
+        std.debug.print("  per op  = {d} ns\n", .{per_op_ns});
+        std.debug.print("  per op  = {d:.3} µs\n", .{@as(f64, @floatFromInt(per_op_ns)) / 1000.0});
     }
 
-    try stdout.print("\nField final collapse_count (after benches) is not meaningful for cost.\n", .{});
+    std.debug.print("\nDone.\n", .{});
 }

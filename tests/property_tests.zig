@@ -1,5 +1,4 @@
 //! Phase 1 property tests for geometric invariants.
-//! These tests must fail if any core invariant is violated.
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -38,7 +37,7 @@ test "Invariant 3 — bounded norm after stabilisation" {
 
 test "Invariant 2 — collapse changes state" {
     var f1 = ResonanceField.init();
-    var f2 = f1;
+    const f2 = f1;
 
     collapse_mod.collapse(&f1, "unique observation that must alter geometry", 1.0);
 
