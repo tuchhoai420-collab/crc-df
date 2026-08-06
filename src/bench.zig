@@ -12,8 +12,8 @@ const DIM = field_mod.DIM;
 const ITERATIONS: u32 = 5000;
 
 fn nanoNow() i128 {
-    var ts: std.posix.timespec = undefined;
-    std.posix.clock_gettime(.MONOTONIC, &ts) catch return 0;
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 

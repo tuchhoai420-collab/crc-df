@@ -1,5 +1,5 @@
 //! Lightweight binary persistence of the ResonanceField.
-//! Only the fixed-size state + minimal metadata is stored.
+//! Uses std.c for file I/O (Zig 0.16 compatibility without full Io plumbing).
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -10,31 +10,39 @@ const MAGIC: u32 = 0x43524344; // "CRCD"
 const VERSION: u16 = 1;
 
 pub fn save(f: *const ResonanceField, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    defer std.heap.page_allocator.free(path_z);
 
-    var buf: [8 + 8 + DIM * 8]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const w = stream.writer();
+    const file = std.c.fopen(path_z.ptr, "wb");
+    if (file == null) return error.FileOpenFailed;
+    defer _ = std.c.fclose(file);
 
-    try w.writeInt(u32, MAGIC, .little);
-    try w.writeInt(u16, VERSION, .little);
-    try w.writeInt(u16, 0, .little); // reserved
-    try w.writeInt(u64, f.collapse_count, .little);
+    var header: [16]u8 = undefined;
+    std.mem.writeInt(u32, header[0..4], MAGIC, .little);
+    std.mem.writeInt(u16, header[4..6], VERSION, .little);
+    std.mem.writeInt(u16, header[6..8], 0, .little);
+    std.mem.writeInt(u64, header[8..16], f.collapse_count, .little);
+
+    _ = std.c.fwrite(&header, 1, header.len, file);
 
     for (f.state) |v| {
-        try w.writeInt(u64, @bitCast(v), .little);
+        var bits: [8]u8 = undefined;
+        std.mem.writeInt(u64, &bits, @bitCast(v), .little);
+        _ = std.c.fwrite(&bits, 1, 8, file);
     }
-
-    try file.writeAll(stream.getWritten());
 }
 
 pub fn load(path: []const u8) !ResonanceField {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    defer std.heap.page_allocator.free(path_z);
+
+    const file = std.c.fopen(path_z.ptr, "rb");
+    if (file == null) return error.FileOpenFailed;
+    defer _ = std.c.fclose(file);
 
     var header: [16]u8 = undefined;
-    _ = try file.readAll(&header);
+    const n = std.c.fread(&header, 1, header.len, file);
+    if (n != header.len) return error.UnexpectedEof;
 
     const magic = std.mem.readInt(u32, header[0..4], .little);
     if (magic != MAGIC) return error.InvalidMagic;
@@ -47,13 +55,12 @@ pub fn load(path: []const u8) !ResonanceField {
     var f = ResonanceField.init();
     f.collapse_count = collapse_count;
 
-    var raw: [DIM * 8]u8 = undefined;
-    _ = try file.readAll(&raw);
-
     var i: usize = 0;
     while (i < DIM) : (i += 1) {
-        const bits = std.mem.readInt(u64, raw[i * 8 ..][0..8], .little);
-        f.state[i] = @bitCast(bits);
+        var bits: [8]u8 = undefined;
+        const rn = std.c.fread(&bits, 1, 8, file);
+        if (rn != 8) return error.UnexpectedEof;
+        f.state[i] = @bitCast(std.mem.readInt(u64, &bits, .little));
     }
 
     return f;
