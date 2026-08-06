@@ -16,6 +16,7 @@ const store_mod = @import("store");
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 const LOG_CAPACITY = field_mod.LOG_CAPACITY;
+const FP_LEN = field_mod.FP_LEN;
 const CollapseEntry = field_mod.CollapseEntry;
 
 const STORE_PATH = "crc_df_field.bin";
@@ -104,13 +105,12 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         return;
     }
 
-    // score + index pairs
     var scores: [LOG_CAPACITY]struct { score: f64, idx: usize } = undefined;
     var n: usize = 0;
 
     for (log_entries, 0..) |entry, i| {
         var len: usize = 0;
-        while (len < 48 and entry.fingerprint[len] != 0) : (len += 1) {}
+        while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
         if (len == 0) continue;
 
         const text = entry.fingerprint[0..len];
@@ -148,7 +148,7 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
     while (k < show) : (k += 1) {
         const entry = log_entries[scores[k].idx];
         var len: usize = 0;
-        while (len < 48 and entry.fingerprint[len] != 0) : (len += 1) {}
+        while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
         const fp = entry.fingerprint[0..len];
         std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
             entry.sequence,
@@ -171,7 +171,6 @@ fn cmdRecall(query: []const u8) !void {
     std.debug.print("  field norm             = {d:.4}\n", .{f.norm()});
     std.debug.print("  total collapses        = {d}\n", .{f.collapse_count});
 
-    // --- Decoding against the bounded log (early trajectory recovery) ---
     var buf: [LOG_CAPACITY]CollapseEntry = undefined;
     const n = f.recentCollapses(&buf);
     decodeNearest(&settled, buf[0..n], 5);
@@ -185,6 +184,7 @@ fn cmdStats() !void {
     std.debug.print("  norm            = {d:.6}\n", .{f.norm()});
     std.debug.print("  log capacity    = {d}\n", .{LOG_CAPACITY});
     std.debug.print("  log entries     = {d}\n", .{f.log_len});
+    std.debug.print("  fingerprint len = {d}\n", .{FP_LEN});
 
     if (f.log_len > 0) {
         var buf: [LOG_CAPACITY]CollapseEntry = undefined;
@@ -194,7 +194,7 @@ fn cmdStats() !void {
         while (i < n) : (i += 1) {
             const e = buf[i];
             var len: usize = 0;
-            while (len < 48 and e.fingerprint[len] != 0) : (len += 1) {}
+            while (len < FP_LEN and e.fingerprint[len] != 0) : (len += 1) {}
             const fp = e.fingerprint[0..len];
             std.debug.print("    [{d}] strength={d:.2}  \"{s}\"\n", .{ e.sequence, e.strength, fp });
         }
@@ -218,7 +218,7 @@ fn cmdSleep(cycles: u32) !void {
             const e = buf[i];
             if (e.strength < 0.4) continue;
             var len: usize = 0;
-            while (len < 48 and e.fingerprint[len] != 0) : (len += 1) {}
+            while (len < FP_LEN and e.fingerprint[len] != 0) : (len += 1) {}
             const text = e.fingerprint[0..len];
             collapse_mod.collapse(&f, text, 0.12);
         }

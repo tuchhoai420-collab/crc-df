@@ -7,6 +7,7 @@ const field_mod = @import("field");
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 const LOG_CAPACITY = field_mod.LOG_CAPACITY;
+const FP_LEN = field_mod.FP_LEN;
 const CollapseEntry = field_mod.CollapseEntry;
 
 const MAGIC: u32 = 0x43524344; // "CRCD"
@@ -41,7 +42,7 @@ pub fn save(f: *const ResonanceField, path: []const u8) !void {
 
     // Collapse log (always write full capacity for simplicity)
     for (f.log) |entry| {
-        _ = std.c.fwrite(&entry.fingerprint, 1, 48, file);
+        _ = std.c.fwrite(&entry.fingerprint, 1, FP_LEN, file);
         var sbits: [4]u8 = undefined;
         std.mem.writeInt(u32, &sbits, @bitCast(entry.strength), .little);
         _ = std.c.fwrite(&sbits, 1, 4, file);
@@ -94,8 +95,8 @@ pub fn load(path: []const u8) !ResonanceField {
         var j: usize = 0;
         while (j < LOG_CAPACITY) : (j += 1) {
             var entry: CollapseEntry = undefined;
-            const rn1 = std.c.fread(&entry.fingerprint, 1, 48, file);
-            if (rn1 != 48) break;
+            const rn1 = std.c.fread(&entry.fingerprint, 1, FP_LEN, file);
+            if (rn1 != FP_LEN) break;
             var sbits: [4]u8 = undefined;
             const rn2 = std.c.fread(&sbits, 1, 4, file);
             if (rn2 != 4) break;

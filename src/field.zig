@@ -10,10 +10,11 @@ const std = @import("std");
 
 pub const DIM: usize = 128;
 pub const LOG_CAPACITY: usize = 32; // fixed, never grows with history
+pub const FP_LEN: usize = 128; // fingerprint length — optimal for readability on desktop hardware
 
 pub const CollapseEntry = struct {
-    /// Truncated fingerprint of the observation text (first 48 bytes, null-padded)
-    fingerprint: [48]u8,
+    /// Truncated fingerprint of the observation text (null-padded)
+    fingerprint: [FP_LEN]u8,
     strength: f32,
     /// Monotonic counter at the moment of collapse
     sequence: u64,
@@ -50,7 +51,7 @@ pub const ResonanceField = struct {
         // zero the log
         for (&f.log) |*e| {
             e.* = .{
-                .fingerprint = [_]u8{0} ** 48,
+                .fingerprint = [_]u8{0} ** FP_LEN,
                 .strength = 0,
                 .sequence = 0,
             };
@@ -76,11 +77,11 @@ pub const ResonanceField = struct {
     /// Record a collapse into the bounded log (overwrites oldest when full).
     pub fn recordCollapse(self: *ResonanceField, text: []const u8, strength: f64) void {
         var entry: CollapseEntry = .{
-            .fingerprint = [_]u8{0} ** 48,
+            .fingerprint = [_]u8{0} ** FP_LEN,
             .strength = @floatCast(strength),
             .sequence = self.collapse_count,
         };
-        const copy_len = @min(text.len, 48);
+        const copy_len = @min(text.len, FP_LEN);
         @memcpy(entry.fingerprint[0..copy_len], text[0..copy_len]);
 
         self.log[self.log_head] = entry;
