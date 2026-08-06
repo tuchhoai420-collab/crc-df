@@ -96,16 +96,17 @@ fn cmdObserve(text: []const u8, strength: f64) !void {
     });
 }
 
-/// Decode: rank recent log entries by cosine similarity of their
-/// text-vectors against the settled state. This is the first real
-/// trajectory/memory readout.
+/// Decode: rank recent log entries by cosine similarity against the settled
+/// state. When similarities are close, higher original strength is preferred
+/// (soft tie-breaker). This biases toward resolution steps that were taught
+/// with elevated strength.
 fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, top_k: usize) void {
     if (log_entries.len == 0) {
         std.debug.print("  (no entries in collapse log to decode against)\n", .{});
         return;
     }
 
-    var scores: [LOG_CAPACITY]struct { score: f64, idx: usize } = undefined;
+    var scores: [LOG_CAPACITY]struct { score: f64, strength: f32, idx: usize } = undefined;
     var n: usize = 0;
 
     for (log_entries, 0..) |entry, i| {
@@ -118,7 +119,9 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         collapse_mod.textToVector(text, &vec);
 
         const sim = stabilise_mod.cosine(settled, &vec);
-        scores[n] = .{ .score = sim, .idx = i };
+        // Soft boost from original strength (keeps geometry primary, strength as tie-break)
+        const combined = sim + 0.02 * @as(f64, entry.strength);
+        scores[n] = .{ .score = combined, .strength = entry.strength, .idx = i };
         n += 1;
     }
 
@@ -127,7 +130,7 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         return;
     }
 
-    // simple selection sort descending (n ≤ 32)
+    // selection sort descending
     var a: usize = 0;
     while (a < n) : (a += 1) {
         var best = a;
@@ -150,9 +153,13 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         var len: usize = 0;
         while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
         const fp = entry.fingerprint[0..len];
+        // report pure cosine (without the small strength boost) for clarity
+        var vec: [DIM]f64 = undefined;
+        collapse_mod.textToVector(fp, &vec);
+        const pure_sim = stabilise_mod.cosine(settled, &vec);
         std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
             entry.sequence,
-            scores[k].score,
+            pure_sim,
             entry.strength,
             fp,
         });
