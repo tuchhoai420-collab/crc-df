@@ -11,6 +11,12 @@ const DIM = field_mod.DIM;
 
 const ITERATIONS: u32 = 5000;
 
+fn nanoNow() i128 {
+    var ts: std.posix.timespec = undefined;
+    std.posix.clock_gettime(.MONOTONIC, &ts) catch return 0;
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
+
 pub fn main() !void {
     std.debug.print("CRC-DF Micro-Benchmark\n", .{});
     std.debug.print("DIM = {d}\n", .{DIM});
@@ -21,12 +27,12 @@ pub fn main() !void {
         var f = ResonanceField.init();
         const text = "dependency conflict resolution path for package libssl and openssl version mismatch on staging";
 
-        const start = std.time.nanoTimestamp();
+        const start = nanoNow();
         var i: u32 = 0;
         while (i < ITERATIONS) : (i += 1) {
             collapse_mod.collapse(&f, text, 1.0);
         }
-        const end = std.time.nanoTimestamp();
+        const end = nanoNow();
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 
@@ -44,12 +50,12 @@ pub fn main() !void {
         const query = "how was the dependency conflict resolved last time";
         var settled: [DIM]f64 = undefined;
 
-        const start = std.time.nanoTimestamp();
+        const start = nanoNow();
         var i: u32 = 0;
         while (i < ITERATIONS) : (i += 1) {
             stabilise_mod.stabilise(&f, query, 12, 0.08, &settled);
         }
-        const end = std.time.nanoTimestamp();
+        const end = nanoNow();
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 
@@ -66,13 +72,13 @@ pub fn main() !void {
         const query = "openssl dependency problem";
         var settled: [DIM]f64 = undefined;
 
-        const start = std.time.nanoTimestamp();
+        const start = nanoNow();
         var i: u32 = 0;
         while (i < ITERATIONS) : (i += 1) {
             collapse_mod.collapse(&f, obs, 1.0);
             stabilise_mod.stabilise(&f, query, 12, 0.08, &settled);
         }
-        const end = std.time.nanoTimestamp();
+        const end = nanoNow();
         const total_ns: u64 = @intCast(end - start);
         const per_op_ns = total_ns / ITERATIONS;
 

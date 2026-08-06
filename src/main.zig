@@ -11,23 +11,25 @@ const DIM = field_mod.DIM;
 
 const STORE_PATH = "crc_df_field.bin";
 
-pub fn main() !void {
-    var arg_it = std.process.args();
-    _ = arg_it.skip();
+pub fn main(init: std.process.Init) !void {
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
 
-    const cmd = arg_it.next() orelse {
+    _ = args.next(); // skip program name
+
+    const cmd = args.next() orelse {
         printUsage();
         return;
     };
 
     if (std.mem.eql(u8, cmd, "observe")) {
-        const text = arg_it.next() orelse {
+        const text = args.next() orelse {
             std.debug.print("usage: crc-df observe \"<text>\"\n", .{});
             return;
         };
         try cmdObserve(text);
     } else if (std.mem.eql(u8, cmd, "recall")) {
-        const query = arg_it.next() orelse {
+        const query = args.next() orelse {
             std.debug.print("usage: crc-df recall \"<query>\"\n", .{});
             return;
         };
