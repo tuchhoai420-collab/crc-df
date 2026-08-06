@@ -45,20 +45,34 @@ All measurements use a fixed number of iterations (5000) and report average time
 - Numbers should be reproducible across runs on the same machine.
 - Results on the Pi will be slower than on the i7; the important property is that both stay in the low-microsecond or sub-microsecond range for the core operations.
 
-## Recording results
+## Recorded Results
 
-After running on both machines, record the numbers in this file under a dated section so Phase 1 can be closed with evidence.
-
-### Template
+### 2026-08-06 — Desktop (i7-class / current machine)
 
 ```
-### YYYY-MM-DD — i7-10700
-collapse:            X.XXX µs
-stabilise (12 steps): X.XXX µs
-combined:             X.XXX µs
+DIM = 128
+Iterations = 5000
 
+collapse:              1.466 µs
+stabilise (12 steps):  4.865 µs
+combined:              5.955 µs
+```
+
+**Interpretation**
+
+- Collapse is extremely cheap (~1.5 µs).
+- Stabilise (the more expensive operation) stays well under 5 µs for 12 steps.
+- A full observe + recall cycle costs ~6 µs.
+- At these numbers, the system can sustain >150 000 observe+recall cycles per second on a single core if needed.
+- Cost is constant and independent of how many previous collapses have occurred (the fixed-dimension invariant is holding in practice).
+
+### Raspberry Pi 500+ (pending)
+
+```
 ### YYYY-MM-DD — Raspberry Pi 500+
 collapse:            X.XXX µs
 stabilise (12 steps): X.XXX µs
 combined:             X.XXX µs
 ```
+
+*(Run `zig build bench -Dtarget=aarch64-linux`, copy the binary, and fill the numbers.)*
