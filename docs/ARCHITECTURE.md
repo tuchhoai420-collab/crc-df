@@ -1,7 +1,7 @@
 # CRC-DF — Architecture & Roadmap
 
-**Version:** 0.1  
-**Status:** Active baseline  
+**Version:** 0.2  
+**Status:** Active baseline — Phase 1 functional foundations planted  
 **Repository:** https://github.com/tuchhoai420-collab/crc-df
 
 ## 1. System Definition
@@ -35,7 +35,7 @@ CRC-DF (Campo de Resonancia Colapsable de Dimensión Fija) is the memory and sel
 │ · Background optimisation loop (“sleep”)                     │
 ├──────────────────────────────────────────────────────────────┤
 │ Geometric Core (Zig)                                         │
-│ ResonanceField · Collapse · Stabilise                        │
+│ ResonanceField · Collapse · Stabilise · Bounded Collapse Log │
 ├──────────────────────────────────────────────────────────────┤
 │ Persistence                                                  │
 │ Binary field snapshot + compact collapse log                 │
@@ -45,71 +45,90 @@ CRC-DF (Campo de Resonancia Colapsable de Dimensión Fija) is the memory and sel
 
 **Strict rule:** The selective intelligence layer only *modulates* the magnitude and timing of collapses. It never alters the geometric rules of the core.
 
-## 3. Required Capabilities (to be demonstrated)
+## 3. Current Implementation Status (Phase 1+)
+
+### Implemented
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Fixed-dimension ResonanceField | ✅ | DIM = 128 |
+| Irreversible collapse | ✅ | Orthogonal projection + novelty-scaled update |
+| Stabilisation dynamics | ✅ | Fixed-step with contraction + metrics |
+| Deterministic text→vector | ✅ | Char n-grams + word hashes (FNV) |
+| Bounded collapse log | ✅ | Ring buffer of 32 recent observations |
+| Binary persistence (v2) | ✅ | State + log, forward-compatible |
+| CLI (observe/recall/stats/sleep/reset) | ✅ | Strength parameter, diagnostics |
+| Property test suite | ✅ | All 4 invariants + log bounds |
+| Micro-benchmarks | ✅ | collapse / stabilise / combined |
+
+### Sleep Loop (foundation)
+
+A minimal `sleep` command already exists. It performs mild re-collapse of the most recent high-strength entries. This is the seed of the future background optimisation loop.
+
+## 4. Required Capabilities (to be demonstrated)
 
 1. **Trajectory recovery**  
-   A complex problem solved once (e.g. OS dependency conflict) must be recoverable on the second occurrence with substantial reduction in steps and without repeating previous errors.
+   A complex problem solved once must be recoverable on the second occurrence with substantial reduction in steps.
 
 2. **Proactive context acquisition**  
-   The system must detect that it lacks user preferences, environment details or available tools, and acquire that information actively (by asking or by autonomous verification).
+   Detect missing user preferences / environment details / tools and acquire them.
 
 3. **Impediment management**  
-   On tool/command failures: diagnose, record cause + resolution path, and reuse that knowledge.
+   On tool/command failures: diagnose, record cause + resolution path, reuse knowledge.
 
 4. **Background optimisation (“sleep”)**  
-   A low-priority loop that:
-   - Reinforces deformations linked to successful outcomes.
-   - Weakens information that showed no utility.
-   - Surfaces recurring impediments and possible strategy improvements.
+   Reinforce useful deformations, weaken irrelevant ones, surface recurring impediments.
 
-## 4. Development Phases
+## 5. Development Phases
 
-### Phase 1 — Core Foundation (current)
-- Freeze current geometric core (fixed dimension, collapse, stabilisation).
-- Formal specification of geometric invariants.
-- Property-based test suite (irreversibility, bounded norm, determinism).
-- Micro-benchmarks of cost on i7-10700 and Raspberry Pi 500+.
-- Improved text→vector encoder (still without heavy external models).
+### Phase 1 — Core Foundation (current — functional base planted)
+- ✅ Geometric core frozen (fixed dimension, collapse, stabilisation)
+- ✅ Formal specification of geometric invariants
+- ✅ Property-based test suite
+- ✅ Micro-benchmarks scaffold
+- ✅ Improved text→vector encoder
+- ✅ Bounded collapse log (trajectory seed)
+- ✅ Richer CLI + sleep stub
 
 **Exit criterion:** Reproducible property tests + cost numbers on both target machines.
 
 ### Phase 2 — Trajectory Memory & Serious Evaluation
-- Representation of full resolution trajectories as structured deformations.
-- CRC-Bench evaluation protocol (long-term retention, recovery of prior solutions, noise resistance).
-- Quantitative comparison against existing approaches.
-- First usable decoding head.
+- Representation of full resolution trajectories as structured deformations
+- CRC-Bench evaluation protocol
+- Quantitative comparison against existing approaches
+- First usable decoding head (or projection back to text)
 
 ### Phase 3 — Proactivity & Optimisation Loop
-- Context-gap detector.
-- Acquisition policy (ask vs autonomous verification).
-- Impediment + resolution recording.
-- Sleep loop with selective reinforcement/weakening rules.
-- End-to-end demonstration of the dependency-conflict scenario.
+- Context-gap detector
+- Acquisition policy
+- Impediment + resolution recording
+- Full sleep loop with selective reinforcement/weakening rules
+- End-to-end demonstration of the dependency-conflict scenario
 
 ### Phase 4 — Exposure & Scalability
-- Stable C-ABI.
-- Official Python binding.
-- Full MCP server (including relevance signals and sleep-loop control).
-- Preparation for multi-field coupling and WASM Component.
+- Stable C-ABI
+- Official Python binding
+- Full MCP server
+- Multi-field coupling preparation + WASM Component
 
 ### Phase 5 — Frontier
-- Higher-order collapse dynamics.
-- Inter-field coupling.
-- Exploration of continuous / neuromorphic hardware mapping.
+- Higher-order collapse dynamics
+- Inter-field coupling
+- Continuous / neuromorphic hardware mapping
 
-## 5. Superiority Metrics (mandatory)
+## 6. Superiority Metrics (mandatory)
 
 | Metric | Description |
 |--------|-------------|
 | Trajectory savings | Steps / time on 2nd occurrence of a complex problem vs 1st |
-| Autonomous impediment resolution rate | % of tool failures resolved without asking the user after having seen them once |
+| Autonomous impediment resolution rate | % of tool failures resolved without asking after having seen them once |
 | Proactive context coverage | % of critical user/environment information acquired without explicit declaration |
 | Sleep-loop effect | Change in recovery quality and field footprint after optimisation |
 | Long-term RAM / disk footprint | After thousands of interactions |
 | Cost per observe + recall | Deterministic, measured on both target machines |
 | Determinism | Same inputs → bit-identical final state |
 
-## 6. Governance
+## 7. Governance
 
 - The Zig geometric core is the single source of truth for dynamics.
 - Any change to collapse or stabilisation rules requires:
@@ -118,12 +137,11 @@ CRC-DF (Campo de Resonancia Colapsable de Dimensión Fija) is the memory and sel
   - Re-execution of the Phase-2 benchmark suite.
 - Bindings and MCP layer contain no memory logic; they only translate.
 
-## 7. Immediate Next Actions (Phase 1)
+## 8. Immediate Next Actions
 
-1. This document is the official architecture baseline.
-2. Freeze current Zig core as `v0.1-core`.
-3. Write formal geometric invariant specification.
-4. Implement property test suite.
-5. Instrument and publish first micro-benchmarks on i7-10700 and Raspberry Pi 500+.
+1. Run property tests and micro-benchmarks on i7-10700 and Raspberry Pi 500+.
+2. Collect first cost numbers and publish them in `docs/BENCHMARKS.md`.
+3. Design CRC-Bench scenarios (trajectory recovery focus).
+4. Begin lightweight decoding experiments (project settled state back toward recent log fingerprints).
 
-Only after Phase 1 is closed with data do we advance to Phase 2.
+Only after Phase 1 is closed with measured data do we advance to Phase 2.
