@@ -1,10 +1,10 @@
-//! CRC-DF CLI — Phase 1+ functional foundation
+//! CRC-DF CLI — Phase 1+ / early Phase 2 foundation
 //!
 //! Commands:
 //!   observe "<text>" [strength]   irreversibly collapse observation
-//!   recall  "<query>"             stabilise and report response
+//!   recall  "<query>"             stabilise + decode nearest log entries
 //!   stats                         field statistics + recent log
-//!   sleep   [cycles]              background optimisation stub (reinforce recent)
+//!   sleep   [cycles]              background optimisation stub
 //!   reset                         wipe field to initial state
 
 const std = @import("std");
@@ -16,6 +16,7 @@ const store_mod = @import("store");
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 const LOG_CAPACITY = field_mod.LOG_CAPACITY;
+const CollapseEntry = field_mod.CollapseEntry;
 
 const STORE_PATH = "crc_df_field.bin";
 
@@ -67,7 +68,7 @@ fn printUsage() void {
         \\
         \\Commands:
         \\  observe "<text>" [strength]   irreversibly collapse observation (default strength 1.0)
-        \\  recall  "<query>"             stabilise under query and report field response
+        \\  recall  "<query>"             stabilise + return nearest past observations
         \\  stats                         show field statistics + recent collapse log
         \\  sleep   [cycles]              background optimisation (reinforce recent useful collapses)
         \\  reset                         wipe field back to initial state
@@ -94,6 +95,70 @@ fn cmdObserve(text: []const u8, strength: f64) !void {
     });
 }
 
+/// Decode: rank recent log entries by cosine similarity of their
+/// text-vectors against the settled state. This is the first real
+/// trajectory/memory readout.
+fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, top_k: usize) void {
+    if (log_entries.len == 0) {
+        std.debug.print("  (no entries in collapse log to decode against)\n", .{});
+        return;
+    }
+
+    // score + index pairs
+    var scores: [LOG_CAPACITY]struct { score: f64, idx: usize } = undefined;
+    var n: usize = 0;
+
+    for (log_entries, 0..) |entry, i| {
+        var len: usize = 0;
+        while (len < 48 and entry.fingerprint[len] != 0) : (len += 1) {}
+        if (len == 0) continue;
+
+        const text = entry.fingerprint[0..len];
+        var vec: [DIM]f64 = undefined;
+        collapse_mod.textToVector(text, &vec);
+
+        const sim = stabilise_mod.cosine(settled, &vec);
+        scores[n] = .{ .score = sim, .idx = i };
+        n += 1;
+    }
+
+    if (n == 0) {
+        std.debug.print("  (no usable fingerprints)\n", .{});
+        return;
+    }
+
+    // simple selection sort descending (n ≤ 32)
+    var a: usize = 0;
+    while (a < n) : (a += 1) {
+        var best = a;
+        var b = a + 1;
+        while (b < n) : (b += 1) {
+            if (scores[b].score > scores[best].score) best = b;
+        }
+        if (best != a) {
+            const tmp = scores[a];
+            scores[a] = scores[best];
+            scores[best] = tmp;
+        }
+    }
+
+    const show = @min(top_k, n);
+    std.debug.print("  nearest past observations (decoded):\n", .{});
+    var k: usize = 0;
+    while (k < show) : (k += 1) {
+        const entry = log_entries[scores[k].idx];
+        var len: usize = 0;
+        while (len < 48 and entry.fingerprint[len] != 0) : (len += 1) {}
+        const fp = entry.fingerprint[0..len];
+        std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
+            entry.sequence,
+            scores[k].score,
+            entry.strength,
+            fp,
+        });
+    }
+}
+
 fn cmdRecall(query: []const u8) !void {
     const f = try loadOrInit();
     var settled: [DIM]f64 = undefined;
@@ -106,30 +171,10 @@ fn cmdRecall(query: []const u8) !void {
     std.debug.print("  field norm             = {d:.4}\n", .{f.norm()});
     std.debug.print("  total collapses        = {d}\n", .{f.collapse_count});
 
-    // Simple diagnostic: show the strongest dimensions of the settled vector
-    std.debug.print("  top dimensions of settled state:\n", .{});
-    var top_idx: [5]usize = .{ 0, 1, 2, 3, 4 };
-    var top_val: [5]f64 = .{ -1e9, -1e9, -1e9, -1e9, -1e9 };
-    for (0..DIM) |i| {
-        const v = @abs(settled[i]);
-        if (v > top_val[4]) {
-            top_val[4] = v;
-            top_idx[4] = i;
-            // bubble sort the top-5
-            var k: usize = 4;
-            while (k > 0 and top_val[k] > top_val[k - 1]) : (k -= 1) {
-                const tmpv = top_val[k - 1];
-                top_val[k - 1] = top_val[k];
-                top_val[k] = tmpv;
-                const tmpi = top_idx[k - 1];
-                top_idx[k - 1] = top_idx[k];
-                top_idx[k] = tmpi;
-            }
-        }
-    }
-    for (0..5) |j| {
-        std.debug.print("    dim[{d}] = {d:.4}\n", .{ top_idx[j], settled[top_idx[j]] });
-    }
+    // --- Decoding against the bounded log (early trajectory recovery) ---
+    var buf: [LOG_CAPACITY]CollapseEntry = undefined;
+    const n = f.recentCollapses(&buf);
+    decodeNearest(&settled, buf[0..n], 5);
 }
 
 fn cmdStats() !void {
@@ -142,13 +187,12 @@ fn cmdStats() !void {
     std.debug.print("  log entries     = {d}\n", .{f.log_len});
 
     if (f.log_len > 0) {
-        var buf: [LOG_CAPACITY]field_mod.CollapseEntry = undefined;
+        var buf: [LOG_CAPACITY]CollapseEntry = undefined;
         const n = f.recentCollapses(&buf);
         std.debug.print("\n  recent collapses (oldest → newest):\n", .{});
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const e = buf[i];
-            // find null terminator or end
             var len: usize = 0;
             while (len < 48 and e.fingerprint[len] != 0) : (len += 1) {}
             const fp = e.fingerprint[0..len];
@@ -157,9 +201,6 @@ fn cmdStats() !void {
     }
 }
 
-/// Sleep loop stub (Phase 3 foundation).
-/// For now: mild re-collapse of the most recent high-strength entries
-/// with reduced strength → reinforces useful deformations without unbounded growth.
 fn cmdSleep(cycles: u32) !void {
     var f = try loadOrInit();
     if (f.log_len == 0) {
@@ -167,12 +208,11 @@ fn cmdSleep(cycles: u32) !void {
         return;
     }
 
-    var buf: [LOG_CAPACITY]field_mod.CollapseEntry = undefined;
+    var buf: [LOG_CAPACITY]CollapseEntry = undefined;
     const n = f.recentCollapses(&buf);
 
     var c: u32 = 0;
     while (c < cycles) : (c += 1) {
-        // Reinforce the last few high-strength collapses lightly
         var i: usize = if (n > 6) n - 6 else 0;
         while (i < n) : (i += 1) {
             const e = buf[i];
@@ -180,7 +220,6 @@ fn cmdSleep(cycles: u32) !void {
             var len: usize = 0;
             while (len < 48 and e.fingerprint[len] != 0) : (len += 1) {}
             const text = e.fingerprint[0..len];
-            // very mild reinforcement
             collapse_mod.collapse(&f, text, 0.12);
         }
     }
