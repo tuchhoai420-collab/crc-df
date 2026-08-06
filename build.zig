@@ -15,42 +15,34 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/collapse.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-        },
     });
+    collapse_mod.addImport("field", field_mod);
 
     const stabilise_mod = b.createModule(.{
         .root_source_file = b.path("src/stabilise.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-            .{ .name = "collapse", .module = collapse_mod },
-        },
     });
+    stabilise_mod.addImport("field", field_mod);
+    stabilise_mod.addImport("collapse", collapse_mod);
 
     const store_mod = b.createModule(.{
         .root_source_file = b.path("src/store.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-        },
     });
+    store_mod.addImport("field", field_mod);
 
     // Main executable
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-            .{ .name = "collapse", .module = collapse_mod },
-            .{ .name = "stabilise", .module = stabilise_mod },
-            .{ .name = "store", .module = store_mod },
-        },
     });
+    exe_mod.addImport("field", field_mod);
+    exe_mod.addImport("collapse", collapse_mod);
+    exe_mod.addImport("stabilise", stabilise_mod);
+    exe_mod.addImport("store", store_mod);
 
     const exe = b.addExecutable(.{
         .name = "crc-df",
@@ -66,17 +58,15 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the CRC-DF CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Benchmark executable (always ReleaseFast)
+    // Benchmark executable (ReleaseFast)
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-            .{ .name = "collapse", .module = collapse_mod },
-            .{ .name = "stabilise", .module = stabilise_mod },
-        },
     });
+    bench_mod.addImport("field", field_mod);
+    bench_mod.addImport("collapse", collapse_mod);
+    bench_mod.addImport("stabilise", stabilise_mod);
 
     const bench_exe = b.addExecutable(.{
         .name = "crc-df-bench",
@@ -94,12 +84,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/property_tests.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &{
-            .{ .name = "field", .module = field_mod },
-            .{ .name = "collapse", .module = collapse_mod },
-            .{ .name = "stabilise", .module = stabilise_mod },
-        },
     });
+    test_mod.addImport("field", field_mod);
+    test_mod.addImport("collapse", collapse_mod);
+    test_mod.addImport("stabilise", stabilise_mod);
 
     const tests = b.addTest(.{
         .root_module = test_mod,
