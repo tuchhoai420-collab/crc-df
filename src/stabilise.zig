@@ -2,8 +2,8 @@
 //! A query perturbs the field. We let it settle for a fixed number of steps.
 //! The settled geometry is the answer.
 
-const field_mod = @import("field.zig");
-const collapse_mod = @import("collapse.zig");
+const field_mod = @import("field");
+const collapse_mod = @import("collapse");
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 

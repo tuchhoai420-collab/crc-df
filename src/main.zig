@@ -1,10 +1,10 @@
 //! Minimal CLI for the CRC-DF operator.
 
 const std = @import("std");
-const field_mod = @import("field.zig");
-const collapse_mod = @import("collapse.zig");
-const stabilise_mod = @import("stabilise.zig");
-const store_mod = @import("store.zig");
+const field_mod = @import("field");
+const collapse_mod = @import("collapse");
+const stabilise_mod = @import("stabilise");
+const store_mod = @import("store");
 
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
@@ -74,8 +74,6 @@ fn cmdRecall(query: []const u8) !void {
     var settled: [DIM]f64 = undefined;
     stabilise_mod.stabilise(&f, query, 12, 0.08, &settled);
 
-    // Simple response: report cosine with the current permanent state
-    // and a few diagnostic numbers. A full generative head can be added later.
     const sim = stabilise_mod.cosine(&f.state, &settled);
     std.debug.print("settled. cosine(state, settled) = {d:.4}\n", .{sim});
     std.debug.print("field norm = {d:.4}, collapses = {d}\n", .{ f.norm(), f.collapse_count });

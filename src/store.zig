@@ -2,7 +2,7 @@
 //! Only the fixed-size state + minimal metadata is stored.
 
 const std = @import("std");
-const field_mod = @import("field.zig");
+const field_mod = @import("field");
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 

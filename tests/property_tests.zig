@@ -10,7 +10,6 @@ const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 
 test "Invariant 1 — fixed dimension" {
-    // DIM is compile-time constant; this test simply documents the contract.
     try std.testing.expect(DIM == 128);
 }
 
@@ -37,13 +36,12 @@ test "Invariant 3 — bounded norm after stabilisation" {
     try std.testing.expect(n > 0.9 and n < 1.1);
 }
 
-test "Invariant 2 — collapse changes state (irreversibility support)" {
+test "Invariant 2 — collapse changes state" {
     var f1 = ResonanceField.init();
     var f2 = f1;
 
     collapse_mod.collapse(&f1, "unique observation that must alter geometry", 1.0);
 
-    // After a non-zero strength collapse the state must differ.
     var identical = true;
     for (0..DIM) |i| {
         if (f1.state[i] != f2.state[i]) {
