@@ -4,7 +4,7 @@
 //!   observe "<text>" [strength]   irreversibly collapse observation
 //!   recall  "<query>"             stabilise + decode nearest log entries
 //!   stats                         field statistics + recent log
-//!   sleep   [cycles]              background optimisation stub
+//!   sleep   [cycles]              selective geometric pressure
 //!   reset                         wipe field to initial state
 
 const std = @import("std");
@@ -71,7 +71,7 @@ fn printUsage() void {
         \\  observe "<text>" [strength]   irreversibly collapse observation (default strength 1.0)
         \\  recall  "<query>"             stabilise + return nearest past observations
         \\  stats                         show field statistics + recent collapse log
-        \\  sleep   [cycles]              background optimisation (reinforce recent useful collapses)
+        \\  sleep   [cycles]              selective geometric pressure (alien sleep)
         \\  reset                         wipe field back to initial state
         \\
         ,
@@ -96,10 +96,6 @@ fn cmdObserve(text: []const u8, strength: f64) !void {
     });
 }
 
-/// Decode: rank recent log entries by cosine similarity against the settled
-/// state. When similarities are close, higher original strength is preferred
-/// (soft tie-breaker). This biases toward resolution steps that were taught
-/// with elevated strength.
 fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, top_k: usize) void {
     if (log_entries.len == 0) {
         std.debug.print("  (no entries in collapse log to decode against)\n", .{});
@@ -119,7 +115,6 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         collapse_mod.textToVector(text, &vec);
 
         const sim = stabilise_mod.cosine(settled, &vec);
-        // Soft boost from original strength (keeps geometry primary, strength as tie-break)
         const combined = sim + 0.02 * @as(f64, entry.strength);
         scores[n] = .{ .score = combined, .strength = entry.strength, .idx = i };
         n += 1;
@@ -130,7 +125,6 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         return;
     }
 
-    // selection sort descending
     var a: usize = 0;
     while (a < n) : (a += 1) {
         var best = a;
@@ -153,7 +147,6 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         var len: usize = 0;
         while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
         const fp = entry.fingerprint[0..len];
-        // report pure cosine (without the small strength boost) for clarity
         var vec: [DIM]f64 = undefined;
         collapse_mod.textToVector(fp, &vec);
         const pure_sim = stabilise_mod.cosine(settled, &vec);
@@ -208,6 +201,9 @@ fn cmdStats() !void {
     }
 }
 
+/// Alien sleep: selective geometric pressure.
+/// Only high-strength observations receive reinforcement energy.
+/// Low-value items are starved. No deletion, no narrative.
 fn cmdSleep(cycles: u32) !void {
     var f = try loadOrInit();
     if (f.log_len == 0) {
@@ -218,21 +214,28 @@ fn cmdSleep(cycles: u32) !void {
     var buf: [LOG_CAPACITY]CollapseEntry = undefined;
     const n = f.recentCollapses(&buf);
 
+    var reinforced: u32 = 0;
     var c: u32 = 0;
     while (c < cycles) : (c += 1) {
-        var i: usize = if (n > 6) n - 6 else 0;
+        var i: usize = 0;
         while (i < n) : (i += 1) {
             const e = buf[i];
-            if (e.strength < 0.4) continue;
+            if (e.strength < 0.8) continue; // starve the weak
             var len: usize = 0;
             while (len < FP_LEN and e.fingerprint[len] != 0) : (len += 1) {}
+            if (len == 0) continue;
             const text = e.fingerprint[0..len];
-            collapse_mod.collapse(&f, text, 0.12);
+            collapse_mod.collapse(&f, text, 0.10 * @as(f64, e.strength));
+            reinforced += 1;
         }
     }
 
     try store_mod.save(&f, STORE_PATH);
-    std.debug.print("sleep completed ({d} cycles). collapse_count now = {d}\n", .{ cycles, f.collapse_count });
+    std.debug.print("sleep completed ({d} cycles, {d} reinforcements). collapse_count now = {d}\n", .{
+        cycles,
+        reinforced,
+        f.collapse_count,
+    });
 }
 
 fn cmdReset() !void {
