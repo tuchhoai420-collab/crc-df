@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/store.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     store_mod.addImport("field", field_mod);
 
@@ -38,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     exe_mod.addImport("field", field_mod);
     exe_mod.addImport("collapse", collapse_mod);
@@ -63,6 +65,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
+        .link_libc = true,
     });
     bench_mod.addImport("field", field_mod);
     bench_mod.addImport("collapse", collapse_mod);
