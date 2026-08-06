@@ -2,36 +2,36 @@
 
 **Primary runtime:** Zig  
 **Ontology:** exogenous, non-anthropic  
-**Target hardware:** Intel i7-10700 (28 GB) + Raspberry Pi 500+ (16 GB, aarch64)
+**Target hardware:** Intel i7-10700 (28 GB) + Raspberry Pi 500+ (16 GB)
 
-## Core idea
+Official architecture and roadmap: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)  
+Geometric invariants: [`docs/INVARIANTS.md`](docs/INVARIANTS.md)
 
-Memory is a continuous field of **fixed dimension**.  
-Every interaction irreversibly deforms the field.  
-Inference is stabilisation after perturbation.  
-No discrete Facts, no growing indexes, no quadratic attention.
+## What this is
 
-## Why Zig
+CRC-DF is the memory and selective-learning substrate of an agent that:
 
-- Zero runtime overhead
-- Explicit memory layout for a fixed-size state
-- Cross-compiles cleanly to x86_64 and aarch64 (Pi 500+)
-- Binary size and RAM footprint remain minimal
-- Direct path to WASM Component Model for future scaling
+- Evolves through interactions with the user and the execution environment.
+- Selectively retains only information that demonstrates real value.
+- Recovers complete problem-solving trajectories.
+- Operates proactively (detects knowledge gaps, acquires context, manages impediments).
+- Possesses a background optimisation loop (“sleep”).
 
-Python is kept only as an optional thin layer for rapid experimentation on the i7.
+The geometric core remains:
 
-## Structure
+- Fixed-dimension continuous state
+- Irreversible collapse
+- Inference by stabilisation
+- Deterministic, bounded cost
 
-```
-src/
-├── field.zig        # ResonanceField (fixed-dim state)
-├── collapse.zig     # irreversible deformation operators
-├── stabilise.zig    # dynamical settling
-├── store.zig        # binary persistence
-└── main.zig         # minimal CLI (observe / recall / stats)
-build.zig
-```
+## Current status
+
+**Phase 1 — Core Foundation** (in progress)
+
+- Geometric core implemented in Zig
+- Official architecture document published
+- Invariant specification published
+- Property tests and micro-benchmarks under construction
 
 ## Build & run
 
@@ -40,25 +40,22 @@ Requires Zig 0.13+ (or current stable).
 ```bash
 zig build
 
-# observe
 ./zig-out/bin/crc-df observe "the staging server uses PostgreSQL 15"
-
-# recall
 ./zig-out/bin/crc-df recall "what database is on staging"
-
-# stats
 ./zig-out/bin/crc-df stats
 ```
 
-Cross-compile for the Raspberry Pi 500+:
+Cross-compile for Raspberry Pi 500+:
 
 ```bash
 zig build -Dtarget=aarch64-linux
 ```
 
-## Design invariants
+## Repository layout
 
-- Dimension is compile-time constant (default 128).
-- Collapse is irreversible (no inverse operation exists).
-- Stabilisation runs a fixed number of steps (deterministic cost).
-- Persistence stores only the field state + compact metadata.
+```
+src/           Geometric core (Zig)
+docs/          Architecture, invariants, future design docs
+tests/         Property tests (Phase 1)
+build.zig
+```
