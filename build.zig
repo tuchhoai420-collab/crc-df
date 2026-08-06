@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Core library module (shared by executable and tests)
+    // Core library modules
     const field_mod = b.addModule("field", .{
         .root_source_file = b.path("src/field.zig"),
         .target = target,
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     });
     store_mod.addImport("field", field_mod);
 
-    // Executable
+    // Main executable
     const exe = b.addExecutable(.{
         .name = "crc-df",
         .root_source_file = b.path("src/main.zig"),
@@ -44,7 +44,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("collapse", collapse_mod);
     exe.root_module.addImport("stabilise", stabilise_mod);
     exe.root_module.addImport("store", store_mod);
-
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -52,11 +51,27 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
-
     const run_step = b.step("run", "Run the CRC-DF CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Property tests (Phase 1)
+    // Benchmark executable
+    const bench_exe = b.addExecutable(.{
+        .name = "crc-df-bench",
+        .root_source_file = b.path("src/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // always optimise benchmarks
+    });
+    bench_exe.root_module.addImport("field", field_mod);
+    bench_exe.root_module.addImport("collapse", collapse_mod);
+    bench_exe.root_module.addImport("stabilise", stabilise_mod);
+    b.installArtifact(bench_exe);
+
+    const bench_cmd = b.addRunArtifact(bench_exe);
+    bench_cmd.step.dependOn(b.getInstallStep());
+    const bench_step = b.step("bench", "Run micro-benchmarks (collapse + stabilise)");
+    bench_step.dependOn(&bench_cmd.step);
+
+    // Property tests
     const tests = b.addTest(.{
         .root_source_file = b.path("tests/property_tests.zig"),
         .target = target,
