@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     });
     store_mod.addImport("field", field_mod);
 
-    // Main executable
+    // ---- CLI executable ----
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -60,7 +60,30 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the CRC-DF CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Benchmark executable (ReleaseFast)
+    // ---- Shared library (C-ABI) for llama.cpp / Python / any host ----
+    const c_api_mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_api_mod.addImport("field", field_mod);
+    c_api_mod.addImport("collapse", collapse_mod);
+    c_api_mod.addImport("stabilise", stabilise_mod);
+    c_api_mod.addImport("store", store_mod);
+
+    const lib = b.addLibrary(.{
+        .name = "crc_df",
+        .root_module = c_api_mod,
+        .linkage = .dynamic,
+    });
+    b.installArtifact(lib);
+
+    // Also install the public header
+    const install_header = b.addInstallFile(b.path("include/crc_df.h"), "include/crc_df.h");
+    b.getInstallStep().dependOn(&install_header.step);
+
+    // ---- Benchmark ----
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
@@ -82,7 +105,7 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run micro-benchmarks (collapse + stabilise)");
     bench_step.dependOn(&bench_cmd.step);
 
-    // Property tests
+    // ---- Property tests ----
     const test_mod = b.createModule(.{
         .root_source_file = b.path("tests/property_tests.zig"),
         .target = target,
