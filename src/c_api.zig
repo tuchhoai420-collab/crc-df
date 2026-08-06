@@ -143,8 +143,7 @@ export fn crc_recall(query: [*:0]const u8, out_buf: [*]u8, out_buf_len: usize, t
         if (written + len + 1 >= out_buf_len) break;
         @memcpy(out_buf[written .. written + len], fp);
         written += len;
-        out_buf[written] = '
-';
+        out_buf[written] = 0x0A; // newline
         written += 1;
         lines += 1;
     }
