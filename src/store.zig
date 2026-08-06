@@ -16,8 +16,9 @@ pub fn save(f: *const ResonanceField, path: []const u8) !void {
     const path_z = try std.heap.page_allocator.dupeZ(u8, path);
     defer std.heap.page_allocator.free(path_z);
 
-    const file = std.c.fopen(path_z.ptr, "wb");
-    if (file == null) return error.FileOpenFailed;
+    const file_opt = std.c.fopen(path_z.ptr, "wb");
+    if (file_opt == null) return error.FileOpenFailed;
+    const file = file_opt.?;
     defer _ = std.c.fclose(file);
 
     // Header: magic(4) + version(2) + pad(2) + collapse_count(8) + log_len(8) + log_head(8)
@@ -54,8 +55,9 @@ pub fn load(path: []const u8) !ResonanceField {
     const path_z = try std.heap.page_allocator.dupeZ(u8, path);
     defer std.heap.page_allocator.free(path_z);
 
-    const file = std.c.fopen(path_z.ptr, "rb");
-    if (file == null) return error.FileOpenFailed;
+    const file_opt = std.c.fopen(path_z.ptr, "rb");
+    if (file_opt == null) return error.FileOpenFailed;
+    const file = file_opt.?;
     defer _ = std.c.fclose(file);
 
     var header: [32]u8 = undefined;

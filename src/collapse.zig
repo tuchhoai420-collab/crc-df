@@ -14,14 +14,14 @@ const DIM = field_mod.DIM;
 /// Improved deterministic, allocation-free text → vector.
 /// Mixes:
 ///   - character unigrams
-///   - character bigrams
+///   - character bigrams / trigrams
 ///   - word-level hashes (split on whitespace/punctuation)
 /// Still pure, no external models, fully deterministic.
 pub fn textToVector(text: []const u8, out: *[DIM]f64) void {
     @memset(out, 0.0);
     if (text.len == 0) return;
 
-    // Character unigrams + bigrams
+    // Character unigrams + bigrams + trigrams
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         const ch = std.ascii.toLower(text[i]);
@@ -34,11 +34,12 @@ pub fn textToVector(text: []const u8, out: *[DIM]f64) void {
             const ch2 = std.ascii.toLower(text[i + 1]);
             const h2 = (@as(usize, @intCast(ch)) * 31 +% @as(usize, @intCast(ch2))) % DIM;
             out[h2] += 0.55;
-        }
-        if (i + 2 < text.len) {
-            const ch3 = std.ascii.toLower(text[i + 2]);
-            const h3 = (@as(usize, @intCast(ch)) * 37 +% @as(usize, @intCast(ch2)) * 13 +% @as(usize, @intCast(ch3))) % DIM;
-            out[h3] += 0.30;
+
+            if (i + 2 < text.len) {
+                const ch3 = std.ascii.toLower(text[i + 2]);
+                const h3 = (@as(usize, @intCast(ch)) * 37 +% @as(usize, @intCast(ch2)) * 13 +% @as(usize, @intCast(ch3))) % DIM;
+                out[h3] += 0.30;
+            }
         }
     }
 
@@ -111,7 +112,7 @@ pub fn collapse(f: *ResonanceField, observation: []const u8, strength: f64) void
 
     if (dir_norm > 1e-9) {
         // Adaptive scale: stronger when the observation is novel (large orthogonal component)
-        const novelty = dir_norm; // already unit-ish after the projection
+        const novelty = dir_norm;
         const scale = strength * 0.18 * novelty;
         for (0..DIM) |i| {
             f.state[i] += scale * dir[i];
