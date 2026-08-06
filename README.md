@@ -1,61 +1,64 @@
 # CRC-DF — Campo de Resonancia Colapsable de Dimensión Fija
 
+**Primary runtime:** Zig  
 **Ontology:** exogenous, non-anthropic  
-**Target hardware:** Intel i7-10700 (28 GB RAM) + Raspberry Pi 500+ (16 GB)
+**Target hardware:** Intel i7-10700 (28 GB) + Raspberry Pi 500+ (16 GB, aarch64)
 
-## What this is
+## Core idea
 
-A memory operator that rejects the paradigm of ever-growing parameter counts and discrete entity stores.
+Memory is a continuous field of **fixed dimension**.  
+Every interaction irreversibly deforms the field.  
+Inference is stabilisation after perturbation.  
+No discrete Facts, no growing indexes, no quadratic attention.
 
-### Core principles
+## Why Zig
 
-1. **Fixed dimension** — the active state never grows. Capacity is geometric richness of deformations, not number of stored objects.
-2. **Irreversible collapse** — every interaction permanently deforms the field. There is no delete or overwrite of past structure.
-3. **Inference by stabilisation** — a query is a perturbation. The field settles. The settled pattern *is* the answer.
-4. **Local deformation only** — updates are cheap. No global backpropagation, no full reindexing.
+- Zero runtime overhead
+- Explicit memory layout for a fixed-size state
+- Cross-compiles cleanly to x86_64 and aarch64 (Pi 500+)
+- Binary size and RAM footprint remain minimal
+- Direct path to WASM Component Model for future scaling
 
-This is not an imitation of a biological brain. It is an efficiency-first operator designed for predictable, low resource use while preserving long-term consistency.
+Python is kept only as an optional thin layer for rapid experimentation on the i7.
 
 ## Structure
 
 ```
-crc-df/
-├── core/
-│   ├── field.py          # ResonanceField — fixed-dimension state
-│   ├── collapse.py       # irreversible update operators
-│   └── stabilise.py      # dynamical settling / inference
-├── persistence/
-│   └── store.py          # load / save (lightweight)
-├── api/
-│   └── interface.py      # high-level observe / recall / feedback
-├── tests/
-│   └── test_basic.py
-├── requirements.txt
-└── README.md
+src/
+├── field.zig        # ResonanceField (fixed-dim state)
+├── collapse.zig     # irreversible deformation operators
+├── stabilise.zig    # dynamical settling
+├── store.zig        # binary persistence
+└── main.zig         # minimal CLI (observe / recall / stats)
+build.zig
 ```
 
-## Quick start
+## Build & run
+
+Requires Zig 0.13+ (or current stable).
 
 ```bash
-pip install -r requirements.txt
+zig build
 
-python -c "
-from api.interface import Memory
-m = Memory(dim=128)
-m.observe('the staging server uses PostgreSQL 15')
-m.observe('PostgreSQL 15 is running on port 5432')
-print(m.recall('what database is on staging'))
-m.save()
-"
+# observe
+./zig-out/bin/crc-df observe "the staging server uses PostgreSQL 15"
+
+# recall
+./zig-out/bin/crc-df recall "what database is on staging"
+
+# stats
+./zig-out/bin/crc-df stats
 ```
 
-## Design notes
+Cross-compile for the Raspberry Pi 500+:
 
-- The field is a continuous vector of fixed length `D` (default 128).
-- Collapse projects an observation and applies a low-rank irreversible update.
-- Stabilisation runs a short fixed number of dynamical steps (cheap on both target machines).
-- Feedback only modulates local deformation strength.
-- Persistence stores only the current field state + a compact collapse log.
+```bash
+zig build -Dtarget=aarch64-linux
+```
 
-Legacy discrete-entity concepts (Facts, Beliefs, BM25 indexes, explicit graphs, HOT/WARM/COLD tiers) were discarded.  
-Concepts retained in transformed form: irreversibility, usage-based reinforcement, resource boundedness, pure-Python portability.
+## Design invariants
+
+- Dimension is compile-time constant (default 128).
+- Collapse is irreversible (no inverse operation exists).
+- Stabilisation runs a fixed number of steps (deterministic cost).
+- Persistence stores only the field state + compact metadata.
