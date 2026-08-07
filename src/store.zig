@@ -1,5 +1,5 @@
-//! Binary persistence of the ResonanceField + bounded collapse log.
-//! Uses std.fs for reliable I/O across Zig 0.14–0.16 and NetHunter.
+//! Binary persistence via libc stdio (portable across Zig 0.14–0.16).
+//! Avoids std.fs / std.Io churn between releases.
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -12,66 +12,62 @@ const CollapseEntry = field_mod.CollapseEntry;
 const MAGIC: u32 = 0x43524344; // "CRCD"
 const VERSION: u16 = 3;
 
-fn writeU16(file: std.fs.File, v: u16) !void {
-    var b: [2]u8 = undefined;
-    std.mem.writeInt(u16, &b, v, .little);
-    try file.writeAll(&b);
+fn cWrite(file: *std.c.FILE, bytes: []const u8) !void {
+    if (bytes.len == 0) return;
+    const n = std.c.fwrite(bytes.ptr, 1, bytes.len, file);
+    if (n != bytes.len) return error.WriteFailed;
 }
 
-fn writeU32(file: std.fs.File, v: u32) !void {
-    var b: [4]u8 = undefined;
-    std.mem.writeInt(u32, &b, v, .little);
-    try file.writeAll(&b);
-}
-
-fn writeU64(file: std.fs.File, v: u64) !void {
-    var b: [8]u8 = undefined;
-    std.mem.writeInt(u64, &b, v, .little);
-    try file.writeAll(&b);
-}
-
-fn writeF32(file: std.fs.File, v: f32) !void {
-    try writeU32(file, @bitCast(v));
-}
-
-fn writeF64(file: std.fs.File, v: f64) !void {
-    try writeU64(file, @bitCast(v));
-}
-
-fn readExact(file: std.fs.File, buf: []u8) !void {
-    const n = try file.readAll(buf);
+fn cRead(file: *std.c.FILE, buf: []u8) !void {
+    if (buf.len == 0) return;
+    const n = std.c.fread(buf.ptr, 1, buf.len, file);
     if (n != buf.len) return error.UnexpectedEof;
 }
 
-fn readU16(file: std.fs.File) !u16 {
+fn writeU16(file: *std.c.FILE, v: u16) !void {
     var b: [2]u8 = undefined;
-    try readExact(file, &b);
+    std.mem.writeInt(u16, &b, v, .little);
+    try cWrite(file, &b);
+}
+
+fn writeU32(file: *std.c.FILE, v: u32) !void {
+    var b: [4]u8 = undefined;
+    std.mem.writeInt(u32, &b, v, .little);
+    try cWrite(file, &b);
+}
+
+fn writeU64(file: *std.c.FILE, v: u64) !void {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b, v, .little);
+    try cWrite(file, &b);
+}
+
+fn readU16(file: *std.c.FILE) !u16 {
+    var b: [2]u8 = undefined;
+    try cRead(file, &b);
     return std.mem.readInt(u16, &b, .little);
 }
 
-fn readU32(file: std.fs.File) !u32 {
+fn readU32(file: *std.c.FILE) !u32 {
     var b: [4]u8 = undefined;
-    try readExact(file, &b);
+    try cRead(file, &b);
     return std.mem.readInt(u32, &b, .little);
 }
 
-fn readU64(file: std.fs.File) !u64 {
+fn readU64(file: *std.c.FILE) !u64 {
     var b: [8]u8 = undefined;
-    try readExact(file, &b);
+    try cRead(file, &b);
     return std.mem.readInt(u64, &b, .little);
 }
 
-fn readF32(file: std.fs.File) !f32 {
-    return @bitCast(try readU32(file));
-}
-
-fn readF64(file: std.fs.File) !f64 {
-    return @bitCast(try readU64(file));
-}
-
 pub fn save(f: *const ResonanceField, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    defer std.heap.page_allocator.free(path_z);
+
+    const file_opt = std.c.fopen(path_z.ptr, "wb");
+    if (file_opt == null) return error.FileOpenFailed;
+    const file = file_opt.?;
+    defer _ = std.c.fclose(file);
 
     try writeU32(file, MAGIC);
     try writeU16(file, VERSION);
@@ -81,26 +77,30 @@ pub fn save(f: *const ResonanceField, path: []const u8) !void {
     try writeU64(file, @as(u64, f.log_head));
 
     for (f.state) |v| {
-        try writeF64(file, v);
+        try writeU64(file, @bitCast(v));
     }
 
-    for (f.log) |entry| {
-        try file.writeAll(&entry.fingerprint);
-        try writeF32(file, entry.strength);
+    for (&f.log) |*entry| {
+        try cWrite(file, entry.fingerprint[0..]);
+        try writeU32(file, @bitCast(entry.strength));
         try writeU64(file, entry.sequence);
     }
 }
 
 pub fn load(path: []const u8) !ResonanceField {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    defer std.heap.page_allocator.free(path_z);
+
+    const file_opt = std.c.fopen(path_z.ptr, "rb");
+    if (file_opt == null) return error.FileOpenFailed;
+    const file = file_opt.?;
+    defer _ = std.c.fclose(file);
 
     const magic = try readU32(file);
     if (magic != MAGIC) return error.InvalidMagic;
 
     const version = try readU16(file);
     _ = try readU16(file); // pad
-
     if (version != 2 and version != 3) return error.UnsupportedVersion;
 
     const collapse_count = try readU64(file);
@@ -109,16 +109,14 @@ pub fn load(path: []const u8) !ResonanceField {
 
     var f = ResonanceField.init();
     f.collapse_count = collapse_count;
-    f.log_len = @intCast(@min(log_len, LOG_CAPACITY));
-    f.log_head = @intCast(@min(log_head, LOG_CAPACITY - 1));
+    f.log_len = @intCast(@min(log_len, @as(u64, LOG_CAPACITY)));
+    f.log_head = @intCast(@min(log_head, @as(u64, LOG_CAPACITY - 1)));
 
     var i: usize = 0;
     while (i < DIM) : (i += 1) {
-        f.state[i] = try readF64(file);
+        f.state[i] = @bitCast(try readU64(file));
     }
 
-    // v2 may have been written with FP_LEN=48; v3 always uses current FP_LEN
-    // For v2 with wrong size, we still try current layout (user should reset).
     var j: usize = 0;
     while (j < LOG_CAPACITY) : (j += 1) {
         var entry: CollapseEntry = .{
@@ -126,8 +124,8 @@ pub fn load(path: []const u8) !ResonanceField {
             .strength = 0,
             .sequence = 0,
         };
-        try readExact(file, entry.fingerprint[0..]);
-        entry.strength = try readF32(file);
+        try cRead(file, entry.fingerprint[0..]);
+        entry.strength = @bitCast(try readU32(file));
         entry.sequence = try readU64(file);
         f.log[j] = entry;
     }

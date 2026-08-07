@@ -1,5 +1,5 @@
 //! CRC-DF CLI — Phase 2 foundation (trajectory-aware recall)
-//! Compatible with Zig 0.14 (NetHunter) and Zig 0.16 (desktop).
+//! Requires Zig 0.16+ (process.Init / juicy main).
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -15,9 +15,8 @@ const CollapseEntry = field_mod.CollapseEntry;
 
 const STORE_PATH = "crc_df_field.bin";
 
-pub fn main() !void {
-    // page_allocator is stable across Zig 0.14–0.16 (GPA was renamed/removed in 0.16)
-    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
 
     _ = args.next(); // skip program name
@@ -143,7 +142,10 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
         scores[n] = .{ .score = combined, .idx = i };
         n += 1;
     }
-    if (n == 0) return;
+    if (n == 0) {
+        std.debug.print("  (no usable fingerprints — run reset + observe again)\n", .{});
+        return;
+    }
 
     var a: usize = 0;
     while (a < n) : (a += 1) {
