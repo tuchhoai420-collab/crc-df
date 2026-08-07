@@ -49,6 +49,29 @@ pub const Entry = struct {
     }
 };
 
+fn parseLine(p: *Profile, line: []const u8) void {
+    if (line.len == 0 or line[0] == '#') return;
+
+    const sep1 = std.mem.indexOfScalar(u8, line, '|') orelse return;
+    const rest = line[sep1 + 1 ..];
+    const sep2 = std.mem.indexOfScalar(u8, rest, '|') orelse return;
+    const kind_s = line[0..sep1];
+    const id_s = rest[0..sep2];
+    const text_s = rest[sep2 + 1 ..];
+
+    const kind = Kind.fromString(kind_s) orelse return;
+    const id = std.fmt.parseInt(u32, id_s, 10) catch return;
+    if (p.len >= MAX_ENTRIES) return;
+
+    var e: Entry = .{ .id = id, .kind = kind };
+    const copy_len = @min(text_s.len, MAX_TEXT);
+    @memcpy(e.text[0..copy_len], text_s[0..copy_len]);
+    e.text_len = copy_len;
+    p.entries[p.len] = e;
+    p.len += 1;
+    if (id >= p.next_id) p.next_id = id + 1;
+}
+
 pub const Profile = struct {
     entries: [MAX_ENTRIES]Entry = undefined,
     len: usize = 0,
@@ -68,32 +91,25 @@ pub const Profile = struct {
         const file = file_opt.?;
         defer _ = std.c.fclose(file);
 
-        var line_buf: [512]u8 = undefined;
-        while (std.c.fgets(&line_buf, line_buf.len, file) != null) {
-            var line_len: usize = 0;
-            while (line_len < line_buf.len and line_buf[line_len] != 0) : (line_len += 1) {}
-            while (line_len > 0 and (line_buf[line_len - 1] == '\n' or line_buf[line_len - 1] == '\r')) : (line_len -= 1) {}
-            const line = line_buf[0..line_len];
-            if (line.len == 0 or line[0] == '#') continue;
+        // Read whole file (profile is small) and split on newlines.
+        // Avoids std.c.fgets which is missing in some Zig 0.16 builds.
+        var file_buf: [64 * 1024]u8 = undefined;
+        const nread = std.c.fread(&file_buf, 1, file_buf.len, file);
+        if (nread == 0) return p;
 
-            const sep1 = std.mem.indexOfScalar(u8, line, '|') orelse continue;
-            const rest = line[sep1 + 1 ..];
-            const sep2 = std.mem.indexOfScalar(u8, rest, '|') orelse continue;
-            const kind_s = line[0..sep1];
-            const id_s = rest[0..sep2];
-            const text_s = rest[sep2 + 1 ..];
+        var start: usize = 0;
+        var i: usize = 0;
+        while (i <= nread) : (i += 1) {
+            const at_end = i == nread;
+            const is_nl = if (at_end) true else (file_buf[i] == '\n');
+            if (!is_nl) continue;
 
-            const kind = Kind.fromString(kind_s) orelse continue;
-            const id = std.fmt.parseInt(u32, id_s, 10) catch continue;
-            if (p.len >= MAX_ENTRIES) break;
-
-            var e: Entry = .{ .id = id, .kind = kind };
-            const copy_len = @min(text_s.len, MAX_TEXT);
-            @memcpy(e.text[0..copy_len], text_s[0..copy_len]);
-            e.text_len = copy_len;
-            p.entries[p.len] = e;
-            p.len += 1;
-            if (id >= p.next_id) p.next_id = id + 1;
+            var line = file_buf[start..i];
+            if (line.len > 0 and line[line.len - 1] == '\r') {
+                line = line[0 .. line.len - 1];
+            }
+            parseLine(&p, line);
+            start = i + 1;
         }
         return p;
     }
