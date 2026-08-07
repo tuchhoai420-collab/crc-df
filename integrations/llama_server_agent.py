@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
 """
-CRC-DF × llama-server — real agent loop (dual mode)
+CRC-DF × llama-server — alien dual-channel agent
 
-Modes:
-  auto  — try native tool_calls; if model emits text tool blocks, parse them too
-  tools — OpenAI-style tools only
-  text  — structured text tool calls only (works with almost any GGUF)
+Channel A (identity): dense <<ID ... ID>> frames from crc_df_profile.txt
+Channel B (experience): geometric recall from CRC-DF field
 
-Host-side auto-recall:
-  Before each user turn, CRC-DF recall is injected into context so memory
-  works even if the model never calls tools.
+No anthropomorphic profile prose. The model receives pressure frames, not stories.
 
 Terminal A:
-  ./llama-server -m /path/to/model.gguf --port 8080 -c 4096
+  ./llama-server -m /path/to/qwen.gguf --port 8080 -c 4096
 
 Terminal B:
-  python integrations/llama_server_agent.py
   python integrations/llama_server_agent.py --mode text
-  python integrations/llama_server_agent.py --no-auto-recall
+  python integrations/llama_server_agent.py --prime-identity
 """
 
 from __future__ import annotations
@@ -32,10 +27,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+# local alien protocol helpers
+_SYS = Path(__file__).resolve().parent
+if str(_SYS) not in sys.path:
+    sys.path.insert(0, str(_SYS))
 
-# ---------------------------------------------------------------------------
-# CRC-DF bindings
-# ---------------------------------------------------------------------------
+from alien_frames import (  # noqa: E402
+    ALIEN_SYSTEM,
+    encode_identity_block,
+    geometric_primers,
+    load_profile_entries,
+)
+
 
 class CrcDF:
     def __init__(self, lib_path: str, store_path: str = "crc_df_field.bin"):
@@ -63,9 +66,9 @@ class CrcDF:
         buf = ctypes.create_string_buffer(16384)
         n = self.lib.crc_recall(query.encode("utf-8"), buf, 16384, int(top_k))
         if n <= 0:
-            return "(no relevant memory)"
+            return ""
         lines = buf.value.decode("utf-8", errors="replace").strip().split("\n")
-        return "\n".join(f"- {line}" for line in lines if line)
+        return "\n".join(line for line in lines if line)
 
     def sleep(self, cycles: int = 2) -> str:
         self.lib.crc_sleep(int(cycles))
@@ -73,7 +76,7 @@ class CrcDF:
 
     def reset(self) -> str:
         self.lib.crc_reset()
-        return "field reset"
+        return "field reset (profile file untouched)"
 
     def collapse_count(self) -> int:
         return int(self.lib.crc_collapse_count())
@@ -87,10 +90,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "memory_observe",
-            "description": (
-                "Store a fact, preference, diagnosis or successful resolution. "
-                "strength 1.5 for resolutions, 1.0 for facts, 0.5 for uncertain notes."
-            ),
+            "description": "Collapse experience into geometric field. strength 1.5=resolution, 1.0=fact.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -105,7 +105,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "memory_recall",
-            "description": "Retrieve relevant past observations / resolution trajectories.",
+            "description": "Geometric recall of past resolutions/facts.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -134,16 +134,12 @@ def dispatch(crc: CrcDF, name: str, arguments: dict) -> str:
     if name == "memory_observe":
         return crc.observe(arguments.get("text", ""), float(arguments.get("strength", 1.0)))
     if name == "memory_recall":
-        return crc.recall(arguments.get("query", ""), int(arguments.get("top_k", 4)))
+        return crc.recall(arguments.get("query", ""), int(arguments.get("top_k", 4))) or "(empty)"
     if name == "memory_sleep":
         return crc.sleep(int(arguments.get("cycles", 2)))
     return f"unknown tool: {name}"
 
 
-# Parse text-mode tool calls:
-#   <tool>memory_recall
-#   {"query": "...", "top_k": 4}
-#   </tool>
 TOOL_BLOCK = re.compile(
     r"<tool>\s*([a-zA-Z0-9_]+)\s*\n(.*?)\n\s*</tool>",
     re.DOTALL,
@@ -167,10 +163,6 @@ def strip_tool_blocks(content: str) -> str:
     return TOOL_BLOCK.sub("", content or "").strip()
 
 
-# ---------------------------------------------------------------------------
-# HTTP client
-# ---------------------------------------------------------------------------
-
 def chat_completion(base_url: str, payload: dict) -> dict:
     url = base_url.rstrip("/") + "/chat/completions"
     data = json.dumps(payload).encode("utf-8")
@@ -183,54 +175,65 @@ def chat_completion(base_url: str, payload: dict) -> dict:
     except urllib.error.URLError as e:
         raise SystemExit(
             f"Cannot reach llama-server at {url}\n"
-            f"Start it first:\n"
-            f"  ./llama-server -m model.gguf --port 8080 -c 4096\n\n"
-            f"Error: {e}"
+            f"Start: ./llama-server -m model.gguf --port 8080 -c 4096\nError: {e}"
         ) from e
 
 
-SYSTEM_TOOLS = """You are a local technical assistant with exogenous geometric memory (CRC-DF).
+def build_turn_pressure(user: str, crc: CrcDF, auto_recall: bool) -> str:
+    """
+    Dual-channel pressure packet for this turn.
+    Identity frames + optional geometric experience. No narrative.
+    """
+    parts: list[str] = []
 
-Rules:
-- Before answering about past incidents/preferences/environment: call memory_recall.
-- After solving something: memory_observe with strength 1.5 for resolutions, 1.0 for facts.
-- Be concise.
-"""
+    id_block = encode_identity_block()
+    if id_block:
+        parts.append(id_block)
 
-SYSTEM_TEXT = """You are a local technical assistant with exogenous geometric memory (CRC-DF).
+    if auto_recall and crc.log_len() > 0:
+        mem = crc.recall(user, top_k=4)
+        if mem:
+            parts.append("<<XP\n" + mem + "\nXP>>")
 
-To use memory, emit ONE or more blocks exactly like this:
-
-<tool>memory_recall
-{"query": "openssl dependency conflict", "top_k": 4}
-</tool>
-
-<tool>memory_observe
-{"text": "resolution: pin openssl to 3.0.12 and rebuild container", "strength": 1.5}
-</tool>
-
-<tool>memory_sleep
-{"cycles": 2}
-</tool>
-
-Rules:
-- Before answering about past incidents/preferences/environment: call memory_recall first.
-- After solving something: memory_observe with strength 1.5 for resolutions.
-- After tool results are provided, give a concise final answer without tool blocks.
-"""
+    return "\n".join(parts)
 
 
-def run(base_url: str, lib_path: str, model: str | None, mode: str, auto_recall: bool):
+def run(
+    base_url: str,
+    lib_path: str,
+    model: str | None,
+    mode: str,
+    auto_recall: bool,
+    prime_identity: bool,
+):
     crc = CrcDF(lib_path)
     print(f"[crc-df] collapses={crc.collapse_count()}  log_len={crc.log_len()}")
     print(f"[llama]  {base_url}")
-    print(f"[mode]   {mode}   auto_recall={auto_recall}")
-    print("Commands: /observe <text> | /recall <q> | /sleep [n] | /stats | /reset | /quit")
+    print(f"[mode]   {mode}  auto_recall={auto_recall}  prime_identity={prime_identity}")
+
+    # Geometric priming of identity (channel B): collapse PREF:/LOCK:/... once
+    if prime_identity:
+        primers = geometric_primers()
+        for text, strength in primers:
+            crc.observe(text, strength)
+            print(f"  [prime] {text}  strength={strength}")
+
+    id_preview = encode_identity_block()
+    if id_preview:
+        print("[ID frames]\n" + id_preview)
+    else:
+        print("[ID frames] (none — profile empty)")
+
+    print("Commands: /observe /recall /sleep /stats /reset /id /quit")
     print("-" * 60)
 
-    system = SYSTEM_TOOLS if mode == "tools" else SYSTEM_TEXT
-    if mode == "auto":
-        system = SYSTEM_TEXT + "\n\nIf the runtime provides native function tools, you may use those instead of <tool> blocks."
+    system = ALIEN_SYSTEM
+    if mode in ("text", "auto"):
+        system += (
+            "\n\nTools via text blocks when needed:\n"
+            '<tool>memory_observe\n{"text":"...","strength":1.5}\n</tool>\n'
+            '<tool>memory_recall\n{"query":"..."}\n</tool>'
+        )
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
@@ -256,26 +259,21 @@ def run(base_url: str, lib_path: str, model: str | None, mode: str, auto_recall:
         if user == "/stats":
             print(f"collapses={crc.collapse_count()}  log_len={crc.log_len()}")
             continue
+        if user == "/id":
+            print(encode_identity_block() or "(empty profile)")
+            continue
         if user.startswith("/observe "):
-            text = user[len("/observe "):].strip()
-            print(crc.observe(text, 1.0))
+            print(crc.observe(user[len("/observe "):].strip(), 1.0))
             continue
         if user.startswith("/recall "):
-            q = user[len("/recall "):].strip()
-            print(crc.recall(q))
+            print(crc.recall(user[len("/recall "):].strip()) or "(empty)")
             continue
 
-        # Host-side auto-recall: memory works even if model ignores tools
-        if auto_recall and crc.log_len() > 0:
-            mem = crc.recall(user, top_k=4)
-            if mem != "(no relevant memory)":
-                print(f"  [auto-recall]\n{mem}")
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": f"Relevant geometric memory for this turn:\n{mem}",
-                    }
-                )
+        # Dual-channel pressure for this turn (not chatty system prose)
+        pressure = build_turn_pressure(user, crc, auto_recall)
+        if pressure:
+            print("  [pressure]\n" + pressure)
+            messages.append({"role": "system", "content": pressure})
 
         messages.append({"role": "user", "content": user})
 
@@ -295,8 +293,6 @@ def run(base_url: str, lib_path: str, model: str | None, mode: str, auto_recall:
             msg = resp["choices"][0]["message"]
             content = msg.get("content") or ""
             native_calls = msg.get("tool_calls") or []
-
-            # Prefer native tool_calls; also accept text <tool> blocks
             text_calls = parse_text_tools(content) if mode in ("text", "auto") else []
 
             if native_calls:
@@ -329,12 +325,11 @@ def run(base_url: str, lib_path: str, model: str | None, mode: str, auto_recall:
                     messages.append(
                         {
                             "role": "user",
-                            "content": f"TOOL RESULT [{fn}]:\n{result}\n\nContinue. If you have enough, answer now without tool blocks.",
+                            "content": f"TOOL_RESULT {fn}:\n{result}\n\nAnswer now if sufficient. No tool blocks.",
                         }
                     )
                 continue
 
-            # Final answer
             final = strip_tool_blocks(content) if content else ""
             messages.append({"role": "assistant", "content": content})
             print(f"\nassistant> {final}")
@@ -357,14 +352,18 @@ def find_lib(explicit: str | None) -> str:
 
 
 def main():
-    p = argparse.ArgumentParser(description="CRC-DF agent on llama-server")
+    p = argparse.ArgumentParser(description="CRC-DF alien dual-channel agent")
     p.add_argument("--base-url", default="http://127.0.0.1:8080/v1")
     p.add_argument("--lib", default=None)
     p.add_argument("--model", default=None)
-    p.add_argument("--mode", choices=("auto", "tools", "text"), default="auto",
-                   help="auto=native tools + text blocks; text=works with any GGUF")
-    p.add_argument("--no-auto-recall", action="store_true",
-                   help="disable host-side recall injection each turn")
+    p.add_argument("--mode", choices=("auto", "tools", "text"), default="text",
+                   help="text mode is most reliable with small local models")
+    p.add_argument("--no-auto-recall", action="store_true")
+    p.add_argument(
+        "--prime-identity",
+        action="store_true",
+        help="collapse profile frames into geometric field once at startup",
+    )
     args = p.parse_args()
     run(
         args.base_url,
@@ -372,6 +371,7 @@ def main():
         args.model,
         args.mode,
         auto_recall=not args.no_auto_recall,
+        prime_identity=args.prime_identity,
     )
 
 
