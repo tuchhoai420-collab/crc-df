@@ -1,5 +1,5 @@
 //! CRC-DF CLI — Phase 2 foundation (trajectory-aware recall)
-//! Compatible with Zig 0.13 / 0.14 (classic process args API).
+//! Compatible with Zig 0.14 (NetHunter) and Zig 0.16 (desktop).
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -16,11 +16,8 @@ const CollapseEntry = field_mod.CollapseEntry;
 const STORE_PATH = "crc_df_field.bin";
 
 pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
-
-    var args = try std.process.argsWithAllocator(gpa);
+    // page_allocator is stable across Zig 0.14–0.16 (GPA was renamed/removed in 0.16)
+    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
     defer args.deinit();
 
     _ = args.next(); // skip program name
