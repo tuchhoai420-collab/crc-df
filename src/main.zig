@@ -1,8 +1,8 @@
-//! CRC-DF CLI — Phase 1+ / early Phase 2 foundation
+//! CRC-DF CLI — Phase 2 foundation (trajectory-aware recall)
 //!
 //! Commands:
 //!   observe "<text>" [strength]   irreversibly collapse observation
-//!   recall  "<query>"             stabilise + decode nearest log entries
+//!   recall  "<query>"             stabilise + decode trajectory + nearest
 //!   stats                         field statistics + recent log
 //!   sleep   [cycles]              selective geometric pressure
 //!   reset                         wipe field to initial state
@@ -25,7 +25,7 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
 
-    _ = args.next(); // skip program name
+    _ = args.next();
 
     const cmd = args.next() orelse {
         printUsage();
@@ -68,10 +68,10 @@ fn printUsage() void {
         \\CRC-DF — Campo de Resonancia Colapsable de Dimensión Fija
         \\
         \\Commands:
-        \\  observe "<text>" [strength]   irreversibly collapse observation (default strength 1.0)
-        \\  recall  "<query>"             stabilise + return nearest past observations
-        \\  stats                         show field statistics + recent collapse log
-        \\  sleep   [cycles]              selective geometric pressure (alien sleep)
+        \\  observe "<text>" [strength]   irreversibly collapse observation
+        \\  recall  "<query>"             stabilise + recover trajectory / nearest
+        \\  stats                         field statistics + recent collapse log
+        \\  sleep   [cycles]              selective geometric pressure
         \\  reset                         wipe field back to initial state
         \\
         ,
@@ -96,35 +96,62 @@ fn cmdObserve(text: []const u8, strength: f64) !void {
     });
 }
 
-fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, top_k: usize) void {
+fn entryText(entry: CollapseEntry) []const u8 {
+    var len: usize = 0;
+    while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
+    return entry.fingerprint[0..len];
+}
+
+fn startsWithInsensitive(hay: []const u8, needle: []const u8) bool {
+    if (hay.len < needle.len) return false;
+    var i: usize = 0;
+    while (i < needle.len) : (i += 1) {
+        const a = std.ascii.toLower(hay[i]);
+        const b = std.ascii.toLower(needle[i]);
+        if (a != b) return false;
+    }
+    return true;
+}
+
+/// Heuristic role for trajectory assembly (exogenous tags, not semantics).
+fn roleWeight(text: []const u8) f64 {
+    if (startsWithInsensitive(text, "resolution")) return 0.08;
+    if (startsWithInsensitive(text, "verification")) return 0.07;
+    if (startsWithInsensitive(text, "note")) return 0.06;
+    if (startsWithInsensitive(text, "diagnosis")) return 0.03;
+    if (startsWithInsensitive(text, "attempted")) return 0.02;
+    if (startsWithInsensitive(text, "error")) return 0.01;
+    return 0.0;
+}
+
+fn isResolutionish(text: []const u8) bool {
+    return startsWithInsensitive(text, "resolution") or
+        startsWithInsensitive(text, "verification") or
+        startsWithInsensitive(text, "note");
+}
+
+fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry) void {
     if (log_entries.len == 0) {
-        std.debug.print("  (no entries in collapse log to decode against)\n", .{});
+        std.debug.print("  (no entries in collapse log)\n", .{});
         return;
     }
 
-    var scores: [LOG_CAPACITY]struct { score: f64, strength: f32, idx: usize } = undefined;
+    var scores: [LOG_CAPACITY]struct { score: f64, idx: usize } = undefined;
     var n: usize = 0;
 
     for (log_entries, 0..) |entry, i| {
-        var len: usize = 0;
-        while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
-        if (len == 0) continue;
-
-        const text = entry.fingerprint[0..len];
+        const text = entryText(entry);
+        if (text.len == 0) continue;
         var vec: [DIM]f64 = undefined;
         collapse_mod.textToVector(text, &vec);
-
         const sim = stabilise_mod.cosine(settled, &vec);
-        const combined = sim + 0.02 * @as(f64, entry.strength);
-        scores[n] = .{ .score = combined, .strength = entry.strength, .idx = i };
+        const combined = sim + 0.02 * @as(f64, entry.strength) + roleWeight(text);
+        scores[n] = .{ .score = combined, .idx = i };
         n += 1;
     }
+    if (n == 0) return;
 
-    if (n == 0) {
-        std.debug.print("  (no usable fingerprints)\n", .{});
-        return;
-    }
-
+    // sort by score desc
     var a: usize = 0;
     while (a < n) : (a += 1) {
         var best = a;
@@ -139,20 +166,79 @@ fn decodeNearest(settled: *const [DIM]f64, log_entries: []const CollapseEntry, t
         }
     }
 
-    const show = @min(top_k, n);
-    std.debug.print("  nearest past observations (decoded):\n", .{});
+    // Anchor = best entry; prefer resolutionish if within close score of top
+    var anchor_idx = scores[0].idx;
+    const top_score = scores[0].score;
+    var s: usize = 0;
+    while (s < @min(n, 5)) : (s += 1) {
+        const e = log_entries[scores[s].idx];
+        const t = entryText(e);
+        if (isResolutionish(t) and scores[s].score >= top_score - 0.05) {
+            anchor_idx = scores[s].idx;
+            break;
+        }
+    }
+    const anchor_seq = log_entries[anchor_idx].sequence;
+
+    // Collect trajectory window: sequences near anchor (chronological chain)
+    var traj: [LOG_CAPACITY]usize = undefined;
+    var traj_n: usize = 0;
+    for (log_entries, 0..) |entry, i| {
+        const seq = entry.sequence;
+        if (seq + 4 < anchor_seq) continue; // too old
+        if (seq > anchor_seq + 2) continue; // too new
+        traj[traj_n] = i;
+        traj_n += 1;
+    }
+
+    // Sort trajectory by sequence ascending
+    var i: usize = 0;
+    while (i < traj_n) : (i += 1) {
+        var best = i;
+        var j = i + 1;
+        while (j < traj_n) : (j += 1) {
+            if (log_entries[traj[j]].sequence < log_entries[traj[best]].sequence) best = j;
+        }
+        if (best != i) {
+            const tmp = traj[i];
+            traj[i] = traj[best];
+            traj[best] = tmp;
+        }
+    }
+
+    std.debug.print("  recovered trajectory (chronological):\n", .{});
+    if (traj_n == 0) {
+        std.debug.print("    (empty)\n", .{});
+    } else {
+        var k: usize = 0;
+        while (k < traj_n) : (k += 1) {
+            const entry = log_entries[traj[k]];
+            const fp = entryText(entry);
+            var vec: [DIM]f64 = undefined;
+            collapse_mod.textToVector(fp, &vec);
+            const sim = stabilise_mod.cosine(settled, &vec);
+            std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
+                entry.sequence,
+                sim,
+                entry.strength,
+                fp,
+            });
+        }
+    }
+
+    // Also show pure top-k geometric hits (for transparency)
+    std.debug.print("  top geometric hits:\n", .{});
+    const show = @min(@as(usize, 3), n);
     var k: usize = 0;
     while (k < show) : (k += 1) {
         const entry = log_entries[scores[k].idx];
-        var len: usize = 0;
-        while (len < FP_LEN and entry.fingerprint[len] != 0) : (len += 1) {}
-        const fp = entry.fingerprint[0..len];
+        const fp = entryText(entry);
         var vec: [DIM]f64 = undefined;
         collapse_mod.textToVector(fp, &vec);
-        const pure_sim = stabilise_mod.cosine(settled, &vec);
+        const sim = stabilise_mod.cosine(settled, &vec);
         std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
             entry.sequence,
-            pure_sim,
+            sim,
             entry.strength,
             fp,
         });
@@ -173,7 +259,7 @@ fn cmdRecall(query: []const u8) !void {
 
     var buf: [LOG_CAPACITY]CollapseEntry = undefined;
     const n = f.recentCollapses(&buf);
-    decodeNearest(&settled, buf[0..n], 5);
+    decodeTrajectory(&settled, buf[0..n]);
 }
 
 fn cmdStats() !void {
@@ -193,17 +279,12 @@ fn cmdStats() !void {
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const e = buf[i];
-            var len: usize = 0;
-            while (len < FP_LEN and e.fingerprint[len] != 0) : (len += 1) {}
-            const fp = e.fingerprint[0..len];
+            const fp = entryText(e);
             std.debug.print("    [{d}] strength={d:.2}  \"{s}\"\n", .{ e.sequence, e.strength, fp });
         }
     }
 }
 
-/// Alien sleep: selective geometric pressure.
-/// Only high-strength observations receive reinforcement energy.
-/// Low-value items are starved. No deletion, no narrative.
 fn cmdSleep(cycles: u32) !void {
     var f = try loadOrInit();
     if (f.log_len == 0) {
@@ -220,11 +301,9 @@ fn cmdSleep(cycles: u32) !void {
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const e = buf[i];
-            if (e.strength < 0.8) continue; // starve the weak
-            var len: usize = 0;
-            while (len < FP_LEN and e.fingerprint[len] != 0) : (len += 1) {}
-            if (len == 0) continue;
-            const text = e.fingerprint[0..len];
+            if (e.strength < 0.8) continue;
+            const text = entryText(e);
+            if (text.len == 0) continue;
             collapse_mod.collapse(&f, text, 0.10 * @as(f64, e.strength));
             reinforced += 1;
         }
