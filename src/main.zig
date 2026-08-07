@@ -1,11 +1,5 @@
 //! CRC-DF CLI — Phase 2 foundation (trajectory-aware recall)
-//!
-//! Commands:
-//!   observe "<text>" [strength]   irreversibly collapse observation
-//!   recall  "<query>"             stabilise + decode trajectory + nearest
-//!   stats                         field statistics + recent log
-//!   sleep   [cycles]              selective geometric pressure
-//!   reset                         wipe field to initial state
+//! Compatible with Zig 0.13 / 0.14 (classic process args API).
 
 const std = @import("std");
 const field_mod = @import("field");
@@ -21,11 +15,15 @@ const CollapseEntry = field_mod.CollapseEntry;
 
 const STORE_PATH = "crc_df_field.bin";
 
-pub fn main(init: std.process.Init) !void {
-    var args = try init.minimal.args.iterateAllocator(init.gpa);
+pub fn main() !void {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+
+    var args = try std.process.argsWithAllocator(gpa);
     defer args.deinit();
 
-    _ = args.next();
+    _ = args.next(); // skip program name
 
     const cmd = args.next() orelse {
         printUsage();
@@ -113,7 +111,6 @@ fn startsWithInsensitive(hay: []const u8, needle: []const u8) bool {
     return true;
 }
 
-/// Heuristic role for trajectory assembly (exogenous tags, not semantics).
 fn roleWeight(text: []const u8) f64 {
     if (startsWithInsensitive(text, "resolution")) return 0.08;
     if (startsWithInsensitive(text, "verification")) return 0.07;
@@ -151,7 +148,6 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
     }
     if (n == 0) return;
 
-    // sort by score desc
     var a: usize = 0;
     while (a < n) : (a += 1) {
         var best = a;
@@ -166,7 +162,6 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
         }
     }
 
-    // Anchor = best entry; prefer resolutionish if within close score of top
     var anchor_idx = scores[0].idx;
     const top_score = scores[0].score;
     var s: usize = 0;
@@ -180,18 +175,16 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
     }
     const anchor_seq = log_entries[anchor_idx].sequence;
 
-    // Collect trajectory window: sequences near anchor (chronological chain)
     var traj: [LOG_CAPACITY]usize = undefined;
     var traj_n: usize = 0;
     for (log_entries, 0..) |entry, i| {
         const seq = entry.sequence;
-        if (seq + 4 < anchor_seq) continue; // too old
-        if (seq > anchor_seq + 2) continue; // too new
+        if (seq + 4 < anchor_seq) continue;
+        if (seq > anchor_seq + 2) continue;
         traj[traj_n] = i;
         traj_n += 1;
     }
 
-    // Sort trajectory by sequence ascending
     var i: usize = 0;
     while (i < traj_n) : (i += 1) {
         var best = i;
@@ -226,7 +219,6 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
         }
     }
 
-    // Also show pure top-k geometric hits (for transparency)
     std.debug.print("  top geometric hits:\n", .{});
     const show = @min(@as(usize, 3), n);
     var k: usize = 0;
