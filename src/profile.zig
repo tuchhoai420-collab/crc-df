@@ -4,8 +4,7 @@
 //! - Survives resets of the geometric field.
 //! - Does NOT decay with sleep.
 //! - Entries are only removed by explicit forget(id).
-//! - Format (one entry per line):
-//!     kind|id|text
+//! - Format (one entry per line): kind|id|text
 //!
 //! kinds: preference | methodology | constraint | topic
 
@@ -73,12 +72,10 @@ pub const Profile = struct {
         while (std.c.fgets(&line_buf, line_buf.len, file) != null) {
             var line_len: usize = 0;
             while (line_len < line_buf.len and line_buf[line_len] != 0) : (line_len += 1) {}
-            // trim newline
             while (line_len > 0 and (line_buf[line_len - 1] == '\n' or line_buf[line_len - 1] == '\r')) : (line_len -= 1) {}
             const line = line_buf[0..line_len];
             if (line.len == 0 or line[0] == '#') continue;
 
-            // kind|id|text
             const sep1 = std.mem.indexOfScalar(u8, line, '|') orelse continue;
             const rest = line[sep1 + 1 ..];
             const sep2 = std.mem.indexOfScalar(u8, rest, '|') orelse continue;
@@ -110,7 +107,7 @@ pub const Profile = struct {
         const file = file_opt.?;
         defer _ = std.c.fclose(file);
 
-        const header = "# CRC-DF user profile \xe2\x80\x94 persistent; remove only via explicit forget\n# kind|id|text\n";
+        const header = "# CRC-DF user profile - persistent; remove only via explicit forget\n# kind|id|text\n";
         _ = std.c.fwrite(header.ptr, 1, header.len, file);
 
         var i: usize = 0;
@@ -128,7 +125,6 @@ pub const Profile = struct {
 
     pub fn add(self: *Profile, kind: Kind, text: []const u8) !u32 {
         if (self.len >= MAX_ENTRIES) return error.ProfileFull;
-        // dedup: same kind + same text -> keep existing id
         var i: usize = 0;
         while (i < self.len) : (i += 1) {
             const e = self.entries[i];
@@ -147,12 +143,10 @@ pub const Profile = struct {
         return id;
     }
 
-    /// Returns true if something was removed.
     pub fn forget(self: *Profile, id: u32) bool {
         var i: usize = 0;
         while (i < self.len) : (i += 1) {
             if (self.entries[i].id == id) {
-                // shift left
                 var j = i;
                 while (j + 1 < self.len) : (j += 1) {
                     self.entries[j] = self.entries[j + 1];
@@ -162,27 +156,5 @@ pub const Profile = struct {
             }
         }
         return false;
-    }
-
-    pub fn formatForPrompt(self: *const Profile, buf: []u8) usize {
-        if (self.len == 0) {
-            const msg = "(perfil vac\xc3\xado)";
-            const n = @min(msg.len, buf.len);
-            @memcpy(buf[0..n], msg[0..n]);
-            return n;
-        }
-        var off: usize = 0;
-        var i: usize = 0;
-        while (i < self.len) : (i += 1) {
-            const e = self.entries[i];
-            const chunk = std.fmt.bufPrint(buf[off..], "- [{d}] ({s}) {s}\n", .{
-                e.id,
-                e.kind.toString(),
-                e.textSlice(),
-            }) catch break;
-            off += chunk.len;
-            if (off >= buf.len) break;
-        }
-        return off;
     }
 };

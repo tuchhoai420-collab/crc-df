@@ -1,4 +1,4 @@
-//! CRC-DF CLI — Phase 2 foundation (trajectory-aware recall)
+//! CRC-DF CLI — Phase 2 + persistent profile
 //! Requires Zig 0.16+ (process.Init / juicy main).
 
 const std = @import("std");
@@ -6,12 +6,15 @@ const field_mod = @import("field");
 const collapse_mod = @import("collapse");
 const stabilise_mod = @import("stabilise");
 const store_mod = @import("store");
+const profile_mod = @import("profile");
 
 const ResonanceField = field_mod.ResonanceField;
 const DIM = field_mod.DIM;
 const LOG_CAPACITY = field_mod.LOG_CAPACITY;
 const FP_LEN = field_mod.FP_LEN;
 const CollapseEntry = field_mod.CollapseEntry;
+const Profile = profile_mod.Profile;
+const ProfileKind = profile_mod.Kind;
 
 const STORE_PATH = "crc_df_field.bin";
 
@@ -19,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     var args = try init.minimal.args.iterateAllocator(init.gpa);
     defer args.deinit();
 
-    _ = args.next(); // skip program name
+    _ = args.next();
 
     const cmd = args.next() orelse {
         printUsage();
@@ -52,6 +55,12 @@ pub fn main(init: std.process.Init) !void {
         try cmdSleep(cycles);
     } else if (std.mem.eql(u8, cmd, "reset")) {
         try cmdReset();
+    } else if (std.mem.eql(u8, cmd, "profile")) {
+        const sub = args.next() orelse {
+            std.debug.print("usage: crc-df profile list|add|forget ...\n", .{});
+            return;
+        };
+        try cmdProfile(sub, &args);
     } else {
         printUsage();
     }
@@ -62,11 +71,14 @@ fn printUsage() void {
         \\CRC-DF — Campo de Resonancia Colapsable de Dimensión Fija
         \\
         \\Commands:
-        \\  observe "<text>" [strength]   irreversibly collapse observation
-        \\  recall  "<query>"             stabilise + recover trajectory / nearest
-        \\  stats                         field statistics + recent collapse log
-        \\  sleep   [cycles]              selective geometric pressure
-        \\  reset                         wipe field back to initial state
+        \\  observe "<text>" [strength]     collapse observation into geometric field
+        \\  recall  "<query>"               stabilise + recover trajectory
+        \\  stats                           field + profile summary
+        \\  sleep   [cycles]                selective geometric pressure (not profile)
+        \\  reset                           wipe geometric field only (profile kept)
+        \\  profile list                    show persistent user profile
+        \\  profile add <kind> "<text>"     kind: preference|methodology|constraint|topic
+        \\  profile forget <id>             explicit delete only
         \\
         ,
         .{},
@@ -143,7 +155,7 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
         n += 1;
     }
     if (n == 0) {
-        std.debug.print("  (no usable fingerprints — run reset + observe again)\n", .{});
+        std.debug.print("  (no usable fingerprints)\n", .{});
         return;
     }
 
@@ -199,28 +211,24 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
     }
 
     std.debug.print("  recovered trajectory (chronological):\n", .{});
-    if (traj_n == 0) {
-        std.debug.print("    (empty)\n", .{});
-    } else {
-        var k: usize = 0;
-        while (k < traj_n) : (k += 1) {
-            const entry = log_entries[traj[k]];
-            const fp = entryText(entry);
-            var vec: [DIM]f64 = undefined;
-            collapse_mod.textToVector(fp, &vec);
-            const sim = stabilise_mod.cosine(settled, &vec);
-            std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
-                entry.sequence,
-                sim,
-                entry.strength,
-                fp,
-            });
-        }
+    var k: usize = 0;
+    while (k < traj_n) : (k += 1) {
+        const entry = log_entries[traj[k]];
+        const fp = entryText(entry);
+        var vec: [DIM]f64 = undefined;
+        collapse_mod.textToVector(fp, &vec);
+        const sim = stabilise_mod.cosine(settled, &vec);
+        std.debug.print("    [{d}] sim={d:.3}  strength={d:.2}  \"{s}\"\n", .{
+            entry.sequence,
+            sim,
+            entry.strength,
+            fp,
+        });
     }
 
     std.debug.print("  top geometric hits:\n", .{});
     const show = @min(@as(usize, 3), n);
-    var k: usize = 0;
+    k = 0;
     while (k < show) : (k += 1) {
         const entry = log_entries[scores[k].idx];
         const fp = entryText(entry);
@@ -237,6 +245,17 @@ fn decodeTrajectory(settled: *const [DIM]f64, log_entries: []const CollapseEntry
 }
 
 fn cmdRecall(query: []const u8) !void {
+    // Always surface profile first (identity is not geometric)
+    const prof = Profile.load(profile_mod.PROFILE_PATH);
+    if (prof.len > 0) {
+        std.debug.print("user profile (persistent):\n", .{});
+        var i: usize = 0;
+        while (i < prof.len) : (i += 1) {
+            const e = prof.entries[i];
+            std.debug.print("  [{d}] ({s}) {s}\n", .{ e.id, e.kind.toString(), e.textSlice() });
+        }
+    }
+
     const f = try loadOrInit();
     var settled: [DIM]f64 = undefined;
     const metrics = stabilise_mod.stabiliseWithMetrics(&f, query, 16, 0.07, &settled);
@@ -263,6 +282,9 @@ fn cmdStats() !void {
     std.debug.print("  log entries     = {d}\n", .{f.log_len});
     std.debug.print("  fingerprint len = {d}\n", .{FP_LEN});
 
+    const prof = Profile.load(profile_mod.PROFILE_PATH);
+    std.debug.print("  profile entries = {d}\n", .{prof.len});
+
     if (f.log_len > 0) {
         var buf: [LOG_CAPACITY]CollapseEntry = undefined;
         const n = f.recentCollapses(&buf);
@@ -272,6 +294,15 @@ fn cmdStats() !void {
             const e = buf[i];
             const fp = entryText(e);
             std.debug.print("    [{d}] strength={d:.2}  \"{s}\"\n", .{ e.sequence, e.strength, fp });
+        }
+    }
+
+    if (prof.len > 0) {
+        std.debug.print("\n  user profile:\n", .{});
+        var i: usize = 0;
+        while (i < prof.len) : (i += 1) {
+            const e = prof.entries[i];
+            std.debug.print("    [{d}] ({s}) {s}\n", .{ e.id, e.kind.toString(), e.textSlice() });
         }
     }
 }
@@ -306,10 +337,67 @@ fn cmdSleep(cycles: u32) !void {
         reinforced,
         f.collapse_count,
     });
+    std.debug.print("(profile untouched)\n", .{});
 }
 
 fn cmdReset() !void {
     const f = ResonanceField.init();
     try store_mod.save(&f, STORE_PATH);
-    std.debug.print("field reset to initial state\n", .{});
+    std.debug.print("field reset to initial state (profile kept)\n", .{});
+}
+
+fn cmdProfile(sub: []const u8, args: anytype) !void {
+    var prof = Profile.load(profile_mod.PROFILE_PATH);
+
+    if (std.mem.eql(u8, sub, "list")) {
+        if (prof.len == 0) {
+            std.debug.print("profile empty\n", .{});
+            return;
+        }
+        var i: usize = 0;
+        while (i < prof.len) : (i += 1) {
+            const e = prof.entries[i];
+            std.debug.print("[{d}] ({s}) {s}\n", .{ e.id, e.kind.toString(), e.textSlice() });
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "add")) {
+        const kind_s = args.next() orelse {
+            std.debug.print("usage: crc-df profile add <kind> \"<text>\"\n", .{});
+            return;
+        };
+        const text = args.next() orelse {
+            std.debug.print("usage: crc-df profile add <kind> \"<text>\"\n", .{});
+            return;
+        };
+        const kind = ProfileKind.fromString(kind_s) orelse {
+            std.debug.print("unknown kind '{s}' (use preference|methodology|constraint|topic)\n", .{kind_s});
+            return;
+        };
+        const id = try prof.add(kind, text);
+        try prof.save(profile_mod.PROFILE_PATH);
+        std.debug.print("profile added id={d} kind={s}\n", .{ id, kind.toString() });
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "forget")) {
+        const id_s = args.next() orelse {
+            std.debug.print("usage: crc-df profile forget <id>\n", .{});
+            return;
+        };
+        const id = std.fmt.parseInt(u32, id_s, 10) catch {
+            std.debug.print("invalid id\n", .{});
+            return;
+        };
+        if (prof.forget(id)) {
+            try prof.save(profile_mod.PROFILE_PATH);
+            std.debug.print("profile forgot id={d}\n", .{id});
+        } else {
+            std.debug.print("id {d} not found\n", .{id});
+        }
+        return;
+    }
+
+    std.debug.print("usage: crc-df profile list|add|forget ...\n", .{});
 }
