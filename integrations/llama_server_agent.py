@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-CRC-DF × llama-server — real agent loop
+CRC-DF × llama-server — real agent loop (dual mode)
 
-Uses your already-compiled llama-server (OpenAI-compatible API).
-CRC-DF is bound as tools via the C shared library.
+Modes:
+  auto  — try native tool_calls; if model emits text tool blocks, parse them too
+  tools — OpenAI-style tools only
+  text  — structured text tool calls only (works with almost any GGUF)
 
-1) Terminal A — start the server:
-   ./llama-server -m /path/to/model.gguf --port 8080 -c 4096
+Host-side auto-recall:
+  Before each user turn, CRC-DF recall is injected into context so memory
+  works even if the model never calls tools.
 
-2) Terminal B — run the agent:
-   python integrations/llama_server_agent.py
-   python integrations/llama_server_agent.py --base-url http://127.0.0.1:8080/v1
+Terminal A:
+  ./llama-server -m /path/to/model.gguf --port 8080 -c 4096
+
+Terminal B:
+  python integrations/llama_server_agent.py
+  python integrations/llama_server_agent.py --mode text
+  python integrations/llama_server_agent.py --no-auto-recall
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -80,9 +88,8 @@ TOOLS = [
         "function": {
             "name": "memory_observe",
             "description": (
-                "Permanently store a fact, preference, diagnosis or successful resolution "
-                "into long-term geometric memory. Use strength 1.5 for resolutions that worked, "
-                "1.0 for normal facts, 0.5 for uncertain notes."
+                "Store a fact, preference, diagnosis or successful resolution. "
+                "strength 1.5 for resolutions, 1.0 for facts, 0.5 for uncertain notes."
             ),
             "parameters": {
                 "type": "object",
@@ -98,10 +105,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "memory_recall",
-            "description": (
-                "Retrieve the most relevant past observations and resolution trajectories. "
-                "Call this BEFORE answering about past incidents, preferences, or environment."
-            ),
+            "description": "Retrieve relevant past observations / resolution trajectories.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -116,7 +120,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "memory_sleep",
-            "description": "Run selective geometric consolidation (reinforce high-value memories).",
+            "description": "Selective geometric consolidation.",
             "parameters": {
                 "type": "object",
                 "properties": {"cycles": {"type": "integer", "default": 2}},
@@ -136,50 +140,99 @@ def dispatch(crc: CrcDF, name: str, arguments: dict) -> str:
     return f"unknown tool: {name}"
 
 
+# Parse text-mode tool calls:
+#   <tool>memory_recall
+#   {"query": "...", "top_k": 4}
+#   </tool>
+TOOL_BLOCK = re.compile(
+    r"<tool>\s*([a-zA-Z0-9_]+)\s*\n(.*?)\n\s*</tool>",
+    re.DOTALL,
+)
+
+
+def parse_text_tools(content: str) -> list[tuple[str, dict]]:
+    found: list[tuple[str, dict]] = []
+    for m in TOOL_BLOCK.finditer(content or ""):
+        name = m.group(1).strip()
+        raw = m.group(2).strip()
+        try:
+            args = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            args = {"text": raw} if name == "memory_observe" else {"query": raw}
+        found.append((name, args))
+    return found
+
+
+def strip_tool_blocks(content: str) -> str:
+    return TOOL_BLOCK.sub("", content or "").strip()
+
+
 # ---------------------------------------------------------------------------
-# Minimal OpenAI-compatible client (stdlib only)
+# HTTP client
 # ---------------------------------------------------------------------------
 
 def chat_completion(base_url: str, payload: dict) -> dict:
     url = base_url.rstrip("/") + "/chat/completions"
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=180) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise SystemExit(
             f"Cannot reach llama-server at {url}\n"
-            f"Start it first, e.g.:\n"
+            f"Start it first:\n"
             f"  ./llama-server -m model.gguf --port 8080 -c 4096\n\n"
             f"Error: {e}"
         ) from e
 
 
-SYSTEM = """You are a local technical assistant with access to an exogenous geometric memory (CRC-DF).
+SYSTEM_TOOLS = """You are a local technical assistant with exogenous geometric memory (CRC-DF).
 
 Rules:
-- Before answering about past incidents, preferences, or environment: call memory_recall.
-- After successfully solving a problem: call memory_observe with the resolution and strength 1.5.
-- Store stable facts/preferences with strength 1.0.
-- You may call memory_sleep between tasks.
-- Be concise. Prefer tool calls over speculation when memory can help.
+- Before answering about past incidents/preferences/environment: call memory_recall.
+- After solving something: memory_observe with strength 1.5 for resolutions, 1.0 for facts.
+- Be concise.
+"""
+
+SYSTEM_TEXT = """You are a local technical assistant with exogenous geometric memory (CRC-DF).
+
+To use memory, emit ONE or more blocks exactly like this:
+
+<tool>memory_recall
+{"query": "openssl dependency conflict", "top_k": 4}
+</tool>
+
+<tool>memory_observe
+{"text": "resolution: pin openssl to 3.0.12 and rebuild container", "strength": 1.5}
+</tool>
+
+<tool>memory_sleep
+{"cycles": 2}
+</tool>
+
+Rules:
+- Before answering about past incidents/preferences/environment: call memory_recall first.
+- After solving something: memory_observe with strength 1.5 for resolutions.
+- After tool results are provided, give a concise final answer without tool blocks.
 """
 
 
-def run(base_url: str, lib_path: str, model: str | None):
+def run(base_url: str, lib_path: str, model: str | None, mode: str, auto_recall: bool):
     crc = CrcDF(lib_path)
     print(f"[crc-df] collapses={crc.collapse_count()}  log_len={crc.log_len()}")
     print(f"[llama]  {base_url}")
-    print("Commands: /reset /sleep /stats /quit")
+    print(f"[mode]   {mode}   auto_recall={auto_recall}")
+    print("Commands: /observe <text> | /recall <q> | /sleep [n] | /stats | /reset | /quit")
     print("-" * 60)
 
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
+    system = SYSTEM_TOOLS if mode == "tools" else SYSTEM_TEXT
+    if mode == "auto":
+        system = SYSTEM_TEXT + "\n\nIf the runtime provides native function tools, you may use those instead of <tool> blocks."
+
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
 
     while True:
         try:
@@ -203,47 +256,89 @@ def run(base_url: str, lib_path: str, model: str | None):
         if user == "/stats":
             print(f"collapses={crc.collapse_count()}  log_len={crc.log_len()}")
             continue
+        if user.startswith("/observe "):
+            text = user[len("/observe "):].strip()
+            print(crc.observe(text, 1.0))
+            continue
+        if user.startswith("/recall "):
+            q = user[len("/recall "):].strip()
+            print(crc.recall(q))
+            continue
+
+        # Host-side auto-recall: memory works even if model ignores tools
+        if auto_recall and crc.log_len() > 0:
+            mem = crc.recall(user, top_k=4)
+            if mem != "(no relevant memory)":
+                print(f"  [auto-recall]\n{mem}")
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"Relevant geometric memory for this turn:\n{mem}",
+                    }
+                )
 
         messages.append({"role": "user", "content": user})
 
         for _ in range(8):
             payload: dict[str, Any] = {
                 "messages": messages,
-                "tools": TOOLS,
-                "tool_choice": "auto",
                 "temperature": 0.3,
-                "max_tokens": 512,
+                "max_tokens": 700,
             }
             if model:
                 payload["model"] = model
+            if mode in ("tools", "auto"):
+                payload["tools"] = TOOLS
+                payload["tool_choice"] = "auto"
 
             resp = chat_completion(base_url, payload)
             msg = resp["choices"][0]["message"]
-            messages.append(msg)
+            content = msg.get("content") or ""
+            native_calls = msg.get("tool_calls") or []
 
-            tool_calls = msg.get("tool_calls") or []
-            if not tool_calls:
-                content = msg.get("content") or ""
-                print(f"\nassistant> {content}")
-                break
+            # Prefer native tool_calls; also accept text <tool> blocks
+            text_calls = parse_text_tools(content) if mode in ("text", "auto") else []
 
-            for tc in tool_calls:
-                fn = tc["function"]["name"]
-                raw_args = tc["function"].get("arguments") or "{}"
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except json.JSONDecodeError:
-                    args = {}
-                print(f"  [tool] {fn}({args})")
-                result = dispatch(crc, fn, args)
-                print(f"  [tool→] {result[:400]}")
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", "call"),
-                        "content": result,
-                    }
-                )
+            if native_calls:
+                messages.append(msg)
+                for tc in native_calls:
+                    fn = tc["function"]["name"]
+                    raw_args = tc["function"].get("arguments") or "{}"
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except json.JSONDecodeError:
+                        args = {}
+                    print(f"  [tool] {fn}({args})")
+                    result = dispatch(crc, fn, args)
+                    print(f"  [tool→] {result[:400]}")
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", "call"),
+                            "content": result,
+                        }
+                    )
+                continue
+
+            if text_calls:
+                messages.append({"role": "assistant", "content": content})
+                for fn, args in text_calls:
+                    print(f"  [tool] {fn}({args})")
+                    result = dispatch(crc, fn, args)
+                    print(f"  [tool→] {result[:400]}")
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f"TOOL RESULT [{fn}]:\n{result}\n\nContinue. If you have enough, answer now without tool blocks.",
+                        }
+                    )
+                continue
+
+            # Final answer
+            final = strip_tool_blocks(content) if content else ""
+            messages.append({"role": "assistant", "content": content})
+            print(f"\nassistant> {final}")
+            break
         else:
             print("(tool loop limit reached)")
 
@@ -262,14 +357,22 @@ def find_lib(explicit: str | None) -> str:
 
 
 def main():
-    p = argparse.ArgumentParser(description="CRC-DF agent on top of llama-server")
-    p.add_argument("--base-url", default="http://127.0.0.1:8080/v1",
-                   help="llama-server OpenAI base URL")
-    p.add_argument("--lib", default=None, help="path to libcrc_df.so")
-    p.add_argument("--model", default=None,
-                   help="model name to send (optional; some servers ignore it)")
+    p = argparse.ArgumentParser(description="CRC-DF agent on llama-server")
+    p.add_argument("--base-url", default="http://127.0.0.1:8080/v1")
+    p.add_argument("--lib", default=None)
+    p.add_argument("--model", default=None)
+    p.add_argument("--mode", choices=("auto", "tools", "text"), default="auto",
+                   help="auto=native tools + text blocks; text=works with any GGUF")
+    p.add_argument("--no-auto-recall", action="store_true",
+                   help="disable host-side recall injection each turn")
     args = p.parse_args()
-    run(args.base_url, find_lib(args.lib), args.model)
+    run(
+        args.base_url,
+        find_lib(args.lib),
+        args.model,
+        args.mode,
+        auto_recall=not args.no_auto_recall,
+    )
 
 
 if __name__ == "__main__":
